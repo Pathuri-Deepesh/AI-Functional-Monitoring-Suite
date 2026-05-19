@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Sparkline } from "./Sparkline";
-import type { MonitoredUrl, SparklinePoint } from "../types";
+import type { Flow, MonitoredUrl, SparklinePoint } from "../types";
 
 function formatTrendLabel(windowMinutes: number): string {
   const days = windowMinutes / (60 * 24);
@@ -11,18 +11,29 @@ function formatTrendLabel(windowMinutes: number): string {
 
 interface Props {
   urls: MonitoredUrl[];
+  flows?: Flow[];
   sparklineByUrl: Record<string, SparklinePoint[]>;
   windowMinutes?: number;
 }
 
-export function KpiBar({ urls, sparklineByUrl, windowMinutes = 24 * 60 }: Props) {
+export function KpiBar({ urls, flows = [], sparklineByUrl, windowMinutes = 24 * 60 }: Props) {
   const stats = useMemo(() => {
-    const total = urls.length;
-    const failing = urls.filter(
+    // URLs
+    const failingUrls = urls.filter(
       (u) => u.statusGroup === "error" || u.statusGroup === "5xx" || u.statusGroup === "4xx"
     ).length;
-    const okPct = total > 0 ? ((total - failing) / total) * 100 : 100;
+    const okUrls = urls.length - failingUrls;
 
+    // Flows
+    const okFlows = flows.filter((f) => f.lastRunOk === true).length;
+    const failingFlows = flows.filter((f) => f.lastRunOk === false).length;
+
+    const totalEntities = urls.length + flows.length;
+    const totalHealthy = okUrls + okFlows;
+    const totalFailing = failingUrls + failingFlows;
+    const healthyPct = totalEntities > 0 ? (totalHealthy / totalEntities) * 100 : 100;
+
+    // URL latency only (flows are multi-step, mixing is misleading)
     const latencies = urls
       .map((u) => u.timings?.totalMs)
       .filter((x): x is number => x != null && x > 0);
@@ -31,10 +42,22 @@ export function KpiBar({ urls, sparklineByUrl, windowMinutes = 24 * 60 }: Props)
         ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
         : null;
 
-    return { total, failing, okPct, avgLatency };
-  }, [urls]);
+    return {
+      urlsCount: urls.length,
+      flowsCount: flows.length,
+      totalEntities,
+      okUrls,
+      failingUrls,
+      okFlows,
+      failingFlows,
+      totalHealthy,
+      totalFailing,
+      healthyPct,
+      avgLatency,
+    };
+  }, [urls, flows]);
 
-  // Aggregate project-wide failure-over-time sparkline by summing failures per bucket
+  // Aggregate project-wide latency sparkline (URLs only — flows have their own timeline)
   const projectSparkline: SparklinePoint[] = useMemo(() => {
     const allSeries = Object.values(sparklineByUrl);
     if (allSeries.length === 0) return [];
@@ -67,33 +90,65 @@ export function KpiBar({ urls, sparklineByUrl, windowMinutes = 24 * 60 }: Props)
     return out;
   }, [sparklineByUrl]);
 
+  const hasFlows = stats.flowsCount > 0;
+  const healthyColor =
+    stats.healthyPct >= 95
+      ? "var(--g-2xx)"
+      : stats.healthyPct >= 80
+      ? "var(--g-4xx)"
+      : "var(--g-5xx)";
+  const failingColor = stats.totalFailing > 0 ? "var(--g-5xx)" : "var(--g-2xx)";
+
   return (
     <div className="kpi-bar">
       <div className="kpi-card">
-        <div className="kpi-num">{stats.total}</div>
-        <div className="kpi-lbl">URLs Monitored</div>
+        <div className="kpi-num">{stats.totalEntities}</div>
+        <div className="kpi-lbl">{hasFlows ? "Endpoints" : "URLs Monitored"}</div>
+        {hasFlows && (
+          <div className="kpi-breakdown">
+            {stats.urlsCount} URLs · {stats.flowsCount} flows
+          </div>
+        )}
       </div>
+
       <div className="kpi-card">
-        <div className="kpi-num" style={{ color: stats.okPct >= 95 ? "var(--g-2xx)" : stats.okPct >= 80 ? "var(--g-4xx)" : "var(--g-5xx)" }}>
-          {stats.okPct.toFixed(1)}%
+        <div className="kpi-num" style={{ color: healthyColor }}>
+          {stats.healthyPct.toFixed(1)}%
         </div>
         <div className="kpi-lbl">Currently Healthy</div>
+        {hasFlows && (
+          <div className="kpi-breakdown">
+            {stats.okUrls} URLs · {stats.okFlows} flows
+          </div>
+        )}
       </div>
+
       <div className="kpi-card">
-        <div className="kpi-num">{stats.avgLatency != null ? `${stats.avgLatency}` : "—"}<span className="kpi-unit">ms</span></div>
-        <div className="kpi-lbl">Avg latency</div>
+        <div className="kpi-num">
+          {stats.avgLatency != null ? `${stats.avgLatency}` : "—"}
+          <span className="kpi-unit">ms</span>
+        </div>
+        <div className="kpi-lbl">Avg URL Latency</div>
+        {hasFlows && <div className="kpi-breakdown">flows tracked separately</div>}
       </div>
+
       <div className="kpi-card">
-        <div className="kpi-num" style={{ color: stats.failing > 0 ? "var(--g-5xx)" : "var(--g-2xx)" }}>
-          {stats.failing}
+        <div className="kpi-num" style={{ color: failingColor }}>
+          {stats.totalFailing}
         </div>
         <div className="kpi-lbl">Currently Failing</div>
+        {hasFlows && (
+          <div className="kpi-breakdown">
+            {stats.failingUrls} URLs · {stats.failingFlows} flows
+          </div>
+        )}
       </div>
+
       <div className="kpi-card kpi-card-spark">
         <div className="kpi-spark-wrap">
           <Sparkline points={projectSparkline} width={200} height={40} />
         </div>
-        <div className="kpi-lbl">Project trend ({formatTrendLabel(windowMinutes)})</div>
+        <div className="kpi-lbl">URL trend ({formatTrendLabel(windowMinutes)})</div>
       </div>
     </div>
   );

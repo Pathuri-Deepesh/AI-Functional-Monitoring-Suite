@@ -4,6 +4,11 @@ import type {
   AuditResult,
   BodyType,
   CheckRecord,
+  Extraction,
+  Flow,
+  FlowRun,
+  FlowWithSteps,
+  FlowStep,
   FullSnapshot,
   HttpMethod,
   KeyValue,
@@ -164,4 +169,113 @@ export async function fetchSparkline(
 // ---- Audit (Check All) ----
 export async function runAudit(projectId: string): Promise<AuditResult> {
   return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/audit`, { method: "POST" }));
+}
+
+// ---- Flows ----
+export async function listProjectFlows(projectId: string): Promise<Flow[]> {
+  return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/flows`));
+}
+
+export async function createFlow(
+  projectId: string,
+  input: { name: string; description?: string; intervalMinutes?: number; stopOnFailure?: boolean }
+): Promise<Flow> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/flows`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    })
+  );
+}
+
+export async function fetchFlow(id: string): Promise<FlowWithSteps> {
+  return jsonOrThrow(await fetch(`${BASE}/flows/${id}`));
+}
+
+export async function updateFlow(
+  id: string,
+  patch: Partial<Pick<Flow, "name" | "description" | "intervalMinutes" | "stopOnFailure" | "enabled">>
+): Promise<Flow> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/flows/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    })
+  );
+}
+
+export async function deleteFlow(id: string): Promise<void> {
+  await jsonOrThrow(await fetch(`${BASE}/flows/${id}`, { method: "DELETE" }));
+}
+
+// ---- Flow Steps ----
+export async function addFlowStep(
+  flowId: string,
+  input: {
+    url: string;
+    description?: string;
+    method?: HttpMethod;
+    bodyType?: BodyType;
+    body?: string;
+    bodyContentType?: string;
+    apiKeyId?: string | null;
+    assertions?: Assertion[];
+    customHeaders?: KeyValue[];
+    queryParams?: KeyValue[];
+    extractions?: Extraction[];
+    waitBeforeMs?: number;
+    maxRetries?: number;
+    retryBackoffMs?: number;
+  }
+): Promise<FlowStep> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/flows/${flowId}/steps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    })
+  );
+}
+
+export async function updateFlowStep(id: string, patch: Partial<FlowStep>): Promise<FlowStep> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/steps/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    })
+  );
+}
+
+export async function deleteFlowStep(id: string): Promise<void> {
+  await jsonOrThrow(await fetch(`${BASE}/steps/${id}`, { method: "DELETE" }));
+}
+
+export async function reorderFlowSteps(flowId: string, orderedIds: string[]): Promise<void> {
+  await jsonOrThrow(
+    await fetch(`${BASE}/flows/${flowId}/steps/reorder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderedIds }),
+    })
+  );
+}
+
+// ---- Flow Runs ----
+export async function runFlowNow(id: string): Promise<FlowRun> {
+  return jsonOrThrow(await fetch(`${BASE}/flows/${id}/run`, { method: "POST" }));
+}
+
+export async function listFlowRuns(id: string, limit = 30): Promise<FlowRun[]> {
+  return jsonOrThrow(await fetch(`${BASE}/flows/${id}/runs?limit=${limit}`));
+}
+
+export async function getCachedVariables(id: string): Promise<Record<string, string>> {
+  return jsonOrThrow(await fetch(`${BASE}/flows/${id}/cache`));
+}
+
+export async function clearFlowCache(id: string): Promise<void> {
+  await jsonOrThrow(await fetch(`${BASE}/flows/${id}/cache`, { method: "DELETE" }));
 }

@@ -112,6 +112,9 @@ export interface AuditResult {
   totalUrls: number;
   failingUrls: number;
   okUrls: number;
+  totalFlows: number;
+  failingFlows: number;
+  okFlows: number;
   slack: { posted: boolean; reason?: string };
 }
 
@@ -121,4 +124,90 @@ export interface FullSnapshot {
   groups: Record<StatusGroup, number>;
   total: number;
   lastUpdated: string;
+}
+
+// ===== Flows =====
+
+export type ExtractionSource = "body" | "header" | "status";
+
+export interface Extraction {
+  id: string;
+  source: ExtractionSource;
+  path: string;
+  saveAs: string;
+  ttlSeconds?: number | null;
+}
+
+export interface FlowStep {
+  id: string;
+  flowId: string;
+  position: number;
+  description: string;
+  url: string;
+  method: HttpMethod;
+  bodyType: BodyType;
+  body: string;
+  bodyContentType: string;
+  apiKeyId: string | null;
+  customHeaders: KeyValue[];
+  queryParams: KeyValue[];
+  assertions: Assertion[];
+  extractions: Extraction[];
+  waitBeforeMs: number;
+  maxRetries: number;
+  retryBackoffMs: number;
+}
+
+export interface Flow {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string;
+  intervalMinutes: number;
+  stopOnFailure: boolean;
+  enabled: boolean;
+  lastRunAt: number | null;
+  lastRunOk: boolean | null;
+  lastRunTotalMs: number | null;
+  createdAt: string;
+}
+
+export interface FlowWithSteps extends Flow {
+  steps: FlowStep[];
+}
+
+export interface ExtractedValue {
+  saveAs: string;
+  value: string;
+  fromCache: boolean;
+}
+
+export interface StepResult {
+  id: string;
+  flowRunId: string;
+  stepId: string;
+  position: number;
+  statusCode: number | null;
+  statusGroup: StatusGroup | null;
+  errorReason: string | null;
+  timings: Timings;
+  assertionResults: AssertionResult[];
+  extractedValues: ExtractedValue[];
+  attempts: number;
+  skipped: boolean;
+  skipReason: string | null;
+  ok: boolean;
+  checkedAt: number;
+}
+
+export interface FlowRun {
+  id: string;
+  flowId: string;
+  startedAt: number;
+  endedAt: number | null;
+  ok: boolean;
+  failedAtStepId: string | null;
+  totalMs: number | null;
+  variables: Record<string, string>;
+  stepResults: StepResult[];
 }

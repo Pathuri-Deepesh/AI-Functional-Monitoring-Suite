@@ -6,12 +6,20 @@ import type {
   AssertionResult,
   BodyType,
   CheckRecord,
+  ExtractedValue,
+  Extraction,
+  Flow,
+  FlowRun,
+  FlowStats,
+  FlowStep,
+  FlowWithSteps,
   HttpMethod,
   KeyValue,
   MonitoredUrl,
   Project,
   SparklinePoint,
   StatusGroup,
+  StepResult,
   Timings,
   UrlStats,
 } from "./types.js";
@@ -523,6 +531,569 @@ export function getUrlStats(urlId: string, windowMinutes: number): UrlStats {
     avgLatencyMs,
     p99LatencyMs,
   };
+}
+
+// =============================================================
+// FLOWS
+// =============================================================
+
+interface FlowRow {
+  id: string;
+  project_id: string;
+  name: string;
+  description: string;
+  interval_minutes: number;
+  stop_on_failure: number;
+  enabled: number;
+  last_run_at: number | null;
+  created_at: string;
+}
+
+interface FlowStepRow {
+  id: string;
+  flow_id: string;
+  position: number;
+  description: string;
+  url: string;
+  method: string;
+  body_type: string;
+  body: string;
+  body_content_type: string;
+  api_key_id: string | null;
+  assertions_json: string;
+  custom_headers_json: string;
+  query_params_json: string;
+  extractions_json: string;
+  wait_before_ms: number;
+  max_retries: number;
+  retry_backoff_ms: number;
+}
+
+interface FlowRunRow {
+  id: string;
+  flow_id: string;
+  started_at: number;
+  ended_at: number | null;
+  ok: number;
+  failed_at_step_id: string | null;
+  variables_json: string;
+  total_ms: number | null;
+}
+
+interface StepResultRow {
+  id: string;
+  flow_run_id: string;
+  step_id: string;
+  position: number;
+  status_code: number | null;
+  status_group: string | null;
+  error_reason: string | null;
+  dns_ms: number | null;
+  tcp_ms: number | null;
+  tls_ms: number | null;
+  ttfb_ms: number | null;
+  download_ms: number | null;
+  total_ms: number | null;
+  assertion_results_json: string;
+  extracted_values_json: string;
+  attempts: number;
+  skipped: number;
+  skip_reason: string | null;
+  ok: number;
+  checked_at: number;
+}
+
+function rowToFlow(r: FlowRow & { last_run_ok?: number | null; last_run_total_ms?: number | null }): Flow {
+  const okRaw = (r as any).last_run_ok;
+  const totalRaw = (r as any).last_run_total_ms;
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    name: r.name,
+    description: r.description,
+    intervalMinutes: r.interval_minutes,
+    stopOnFailure: r.stop_on_failure === 1,
+    enabled: r.enabled === 1,
+    lastRunAt: r.last_run_at,
+    lastRunOk: okRaw == null ? null : okRaw === 1,
+    lastRunTotalMs: totalRaw == null ? null : Number(totalRaw),
+    createdAt: r.created_at,
+  };
+}
+
+function rowToFlowStep(r: FlowStepRow): FlowStep {
+  return {
+    id: r.id,
+    flowId: r.flow_id,
+    position: r.position,
+    description: r.description,
+    url: r.url,
+    method: (r.method as HttpMethod) ?? "GET",
+    bodyType: (r.body_type as BodyType) ?? "none",
+    body: r.body ?? "",
+    bodyContentType: r.body_content_type ?? "",
+    apiKeyId: r.api_key_id,
+    assertions: safeParse<Assertion[]>(r.assertions_json, []),
+    customHeaders: safeParse<KeyValue[]>(r.custom_headers_json, []),
+    queryParams: safeParse<KeyValue[]>(r.query_params_json, []),
+    extractions: safeParse<Extraction[]>(r.extractions_json, []),
+    waitBeforeMs: r.wait_before_ms,
+    maxRetries: r.max_retries,
+    retryBackoffMs: r.retry_backoff_ms,
+  };
+}
+
+function rowToFlowRun(r: FlowRunRow, stepResults: StepResult[]): FlowRun {
+  return {
+    id: r.id,
+    flowId: r.flow_id,
+    startedAt: r.started_at,
+    endedAt: r.ended_at,
+    ok: r.ok === 1,
+    failedAtStepId: r.failed_at_step_id,
+    totalMs: r.total_ms,
+    variables: safeParse<Record<string, string>>(r.variables_json, {}),
+    stepResults,
+  };
+}
+
+function rowToStepResult(r: StepResultRow): StepResult {
+  return {
+    id: r.id,
+    flowRunId: r.flow_run_id,
+    stepId: r.step_id,
+    position: r.position,
+    statusCode: r.status_code,
+    statusGroup: (r.status_group as StatusGroup | null) ?? null,
+    errorReason: r.error_reason,
+    timings: {
+      dnsMs: r.dns_ms,
+      tcpMs: r.tcp_ms,
+      tlsMs: r.tls_ms,
+      ttfbMs: r.ttfb_ms,
+      downloadMs: r.download_ms,
+      totalMs: r.total_ms,
+    },
+    assertionResults: safeParse<AssertionResult[]>(r.assertion_results_json, []),
+    extractedValues: safeParse<ExtractedValue[]>(r.extracted_values_json, []),
+    attempts: r.attempts,
+    skipped: r.skipped === 1,
+    skipReason: r.skip_reason,
+    ok: r.ok === 1,
+    checkedAt: r.checked_at,
+  };
+}
+
+// ---- Flow CRUD ----
+
+// Selects flow row plus a correlated subquery for the latest run's ok + duration.
+// Used by all "list flows" calls so the frontend always knows last-run status.
+const FLOW_SELECT_WITH_RUN = `
+  SELECT f.*,
+         (SELECT ok       FROM flow_runs WHERE flow_id = f.id ORDER BY started_at DESC LIMIT 1) AS last_run_ok,
+         (SELECT total_ms FROM flow_runs WHERE flow_id = f.id ORDER BY started_at DESC LIMIT 1) AS last_run_total_ms
+  FROM flows f
+`;
+
+export function listFlows(): Flow[] {
+  const rows = db()
+    .prepare(`${FLOW_SELECT_WITH_RUN} ORDER BY f.created_at`)
+    .all() as FlowRow[];
+  return rows.map(rowToFlow);
+}
+
+export function listFlowsByProject(projectId: string): Flow[] {
+  const rows = db()
+    .prepare(`${FLOW_SELECT_WITH_RUN} WHERE f.project_id = ? ORDER BY f.created_at`)
+    .all(projectId) as FlowRow[];
+  return rows.map(rowToFlow);
+}
+
+export function getFlow(id: string): Flow | undefined {
+  const row = db()
+    .prepare(`${FLOW_SELECT_WITH_RUN} WHERE f.id = ?`)
+    .get(id) as FlowRow | undefined;
+  return row ? rowToFlow(row) : undefined;
+}
+
+export function getFlowWithSteps(id: string): FlowWithSteps | undefined {
+  const flow = getFlow(id);
+  if (!flow) return undefined;
+  return { ...flow, steps: listFlowSteps(id) };
+}
+
+export function createFlow(input: {
+  projectId: string;
+  name: string;
+  description?: string;
+  intervalMinutes?: number;
+  stopOnFailure?: boolean;
+  enabled?: boolean;
+}): Flow {
+  if (!getProject(input.projectId)) throw new Error("Project not found");
+  const id = randomUUID();
+  db()
+    .prepare(
+      `INSERT INTO flows (id, project_id, name, description, interval_minutes, stop_on_failure, enabled, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      input.projectId,
+      input.name.trim() || "Untitled flow",
+      input.description?.trim() ?? "",
+      Math.max(1, Math.min(60 * 24, Number(input.intervalMinutes ?? 5))),
+      input.stopOnFailure !== false ? 1 : 0,
+      input.enabled !== false ? 1 : 0,
+      new Date().toISOString()
+    );
+  return getFlow(id)!;
+}
+
+export function updateFlow(
+  id: string,
+  patch: Partial<Pick<Flow, "name" | "description" | "intervalMinutes" | "stopOnFailure" | "enabled">>
+): Flow | undefined {
+  const existing = getFlow(id);
+  if (!existing) return undefined;
+  db()
+    .prepare(
+      `UPDATE flows
+       SET name = ?, description = ?, interval_minutes = ?, stop_on_failure = ?, enabled = ?
+       WHERE id = ?`
+    )
+    .run(
+      patch.name?.trim() ?? existing.name,
+      patch.description?.trim() ?? existing.description,
+      Math.max(1, Math.min(60 * 24, Number(patch.intervalMinutes ?? existing.intervalMinutes))),
+      (patch.stopOnFailure ?? existing.stopOnFailure) ? 1 : 0,
+      (patch.enabled ?? existing.enabled) ? 1 : 0,
+      id
+    );
+  return getFlow(id);
+}
+
+export function deleteFlow(id: string): boolean {
+  const result = db().prepare("DELETE FROM flows WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function markFlowRunCompletedAt(id: string, when: number): void {
+  db().prepare("UPDATE flows SET last_run_at = ? WHERE id = ?").run(when, id);
+}
+
+// ---- Step CRUD ----
+
+export function listFlowSteps(flowId: string): FlowStep[] {
+  const rows = db()
+    .prepare("SELECT * FROM flow_steps WHERE flow_id = ? ORDER BY position")
+    .all(flowId) as FlowStepRow[];
+  return rows.map(rowToFlowStep);
+}
+
+export function getFlowStep(id: string): FlowStep | undefined {
+  const row = db().prepare("SELECT * FROM flow_steps WHERE id = ?").get(id) as
+    | FlowStepRow
+    | undefined;
+  return row ? rowToFlowStep(row) : undefined;
+}
+
+export function addFlowStep(input: {
+  flowId: string;
+  url: string;
+  description?: string;
+  method?: HttpMethod;
+  bodyType?: BodyType;
+  body?: string;
+  bodyContentType?: string;
+  apiKeyId?: string | null;
+  assertions?: Assertion[];
+  customHeaders?: KeyValue[];
+  queryParams?: KeyValue[];
+  extractions?: Extraction[];
+  waitBeforeMs?: number;
+  maxRetries?: number;
+  retryBackoffMs?: number;
+}): FlowStep {
+  const flow = getFlow(input.flowId);
+  if (!flow) throw new Error("Flow not found");
+
+  const url = input.url.trim();
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Only http(s) URLs are supported");
+    }
+  } catch {
+    throw new Error("Invalid URL");
+  }
+  if ((input.method as string) === "DELETE") {
+    throw new Error("DELETE method is not allowed for safety");
+  }
+
+  // Next position = current max + 1
+  const maxRow = db()
+    .prepare("SELECT MAX(position) AS m FROM flow_steps WHERE flow_id = ?")
+    .get(input.flowId) as { m: number | null };
+  const nextPos = (maxRow.m ?? 0) + 1;
+
+  const id = randomUUID();
+  db()
+    .prepare(
+      `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
+                               api_key_id, assertions_json, custom_headers_json, query_params_json,
+                               extractions_json, wait_before_ms, max_retries, retry_backoff_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      input.flowId,
+      nextPos,
+      input.description?.trim() ?? "",
+      url,
+      input.method ?? "GET",
+      input.bodyType ?? "none",
+      input.body ?? "",
+      input.bodyContentType?.trim() ?? "",
+      input.apiKeyId ?? null,
+      JSON.stringify(input.assertions ?? []),
+      JSON.stringify(cleanKv(input.customHeaders ?? [])),
+      JSON.stringify(cleanKv(input.queryParams ?? [])),
+      JSON.stringify(input.extractions ?? []),
+      Math.max(0, Math.min(60_000, Number(input.waitBeforeMs ?? 0))),
+      Math.max(0, Math.min(5, Number(input.maxRetries ?? 0))),
+      Math.max(100, Math.min(30_000, Number(input.retryBackoffMs ?? 1000)))
+    );
+  return getFlowStep(id)!;
+}
+
+export function updateFlowStep(
+  id: string,
+  patch: Partial<{
+    description: string;
+    url: string;
+    method: HttpMethod;
+    bodyType: BodyType;
+    body: string;
+    bodyContentType: string;
+    apiKeyId: string | null;
+    assertions: Assertion[];
+    customHeaders: KeyValue[];
+    queryParams: KeyValue[];
+    extractions: Extraction[];
+    waitBeforeMs: number;
+    maxRetries: number;
+    retryBackoffMs: number;
+  }>
+): FlowStep | undefined {
+  const existing = getFlowStep(id);
+  if (!existing) return undefined;
+  if ((patch.method as string) === "DELETE") {
+    throw new Error("DELETE method is not allowed for safety");
+  }
+  db()
+    .prepare(
+      `UPDATE flow_steps
+       SET description = ?, url = ?, method = ?, body_type = ?, body = ?, body_content_type = ?,
+           api_key_id = ?, assertions_json = ?, custom_headers_json = ?, query_params_json = ?,
+           extractions_json = ?, wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?
+       WHERE id = ?`
+    )
+    .run(
+      patch.description ?? existing.description,
+      patch.url ?? existing.url,
+      patch.method ?? existing.method,
+      patch.bodyType ?? existing.bodyType,
+      patch.body ?? existing.body,
+      patch.bodyContentType ?? existing.bodyContentType,
+      patch.apiKeyId !== undefined ? patch.apiKeyId : existing.apiKeyId,
+      JSON.stringify(patch.assertions ?? existing.assertions),
+      JSON.stringify(cleanKv(patch.customHeaders ?? existing.customHeaders)),
+      JSON.stringify(cleanKv(patch.queryParams ?? existing.queryParams)),
+      JSON.stringify(patch.extractions ?? existing.extractions),
+      Math.max(0, Math.min(60_000, Number(patch.waitBeforeMs ?? existing.waitBeforeMs))),
+      Math.max(0, Math.min(5, Number(patch.maxRetries ?? existing.maxRetries))),
+      Math.max(100, Math.min(30_000, Number(patch.retryBackoffMs ?? existing.retryBackoffMs))),
+      id
+    );
+  return getFlowStep(id);
+}
+
+export function deleteFlowStep(id: string): boolean {
+  const result = db().prepare("DELETE FROM flow_steps WHERE id = ?").run(id);
+  return result.changes > 0;
+}
+
+export function reorderFlowSteps(flowId: string, orderedIds: string[]): void {
+  tx(() => {
+    orderedIds.forEach((stepId, idx) => {
+      db()
+        .prepare("UPDATE flow_steps SET position = ? WHERE id = ? AND flow_id = ?")
+        .run(idx + 1, stepId, flowId);
+    });
+  });
+}
+
+// ---- Flow Runs ----
+
+export function startFlowRun(flowId: string): string {
+  const id = randomUUID();
+  db()
+    .prepare(
+      `INSERT INTO flow_runs (id, flow_id, started_at, ended_at, ok, failed_at_step_id, variables_json, total_ms)
+       VALUES (?, ?, ?, NULL, 0, NULL, '{}', NULL)`
+    )
+    .run(id, flowId, Date.now());
+  return id;
+}
+
+export function finishFlowRun(args: {
+  id: string;
+  ok: boolean;
+  failedAtStepId: string | null;
+  variables: Record<string, string>;
+  totalMs: number;
+}): void {
+  const endedAt = Date.now();
+  db()
+    .prepare(
+      `UPDATE flow_runs
+       SET ended_at = ?, ok = ?, failed_at_step_id = ?, variables_json = ?, total_ms = ?
+       WHERE id = ?`
+    )
+    .run(
+      endedAt,
+      args.ok ? 1 : 0,
+      args.failedAtStepId,
+      JSON.stringify(args.variables),
+      args.totalMs,
+      args.id
+    );
+}
+
+export function recordStepResult(args: {
+  flowRunId: string;
+  stepId: string;
+  position: number;
+  statusCode: number | null;
+  statusGroup: StatusGroup | null;
+  errorReason: string | null;
+  timings: Timings;
+  assertionResults: AssertionResult[];
+  extractedValues: ExtractedValue[];
+  attempts: number;
+  skipped: boolean;
+  skipReason: string | null;
+  ok: boolean;
+}): void {
+  db()
+    .prepare(
+      `INSERT INTO step_results (id, flow_run_id, step_id, position, status_code, status_group, error_reason,
+                                  dns_ms, tcp_ms, tls_ms, ttfb_ms, download_ms, total_ms,
+                                  assertion_results_json, extracted_values_json, attempts, skipped, skip_reason,
+                                  ok, checked_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      randomUUID(),
+      args.flowRunId,
+      args.stepId,
+      args.position,
+      args.statusCode,
+      args.statusGroup,
+      args.errorReason,
+      args.timings.dnsMs,
+      args.timings.tcpMs,
+      args.timings.tlsMs,
+      args.timings.ttfbMs,
+      args.timings.downloadMs,
+      args.timings.totalMs,
+      JSON.stringify(args.assertionResults),
+      JSON.stringify(args.extractedValues),
+      args.attempts,
+      args.skipped ? 1 : 0,
+      args.skipReason,
+      args.ok ? 1 : 0,
+      Date.now()
+    );
+}
+
+export function getFlowRun(id: string): FlowRun | undefined {
+  const row = db().prepare("SELECT * FROM flow_runs WHERE id = ?").get(id) as
+    | FlowRunRow
+    | undefined;
+  if (!row) return undefined;
+  const stepRows = db()
+    .prepare("SELECT * FROM step_results WHERE flow_run_id = ? ORDER BY position")
+    .all(id) as StepResultRow[];
+  return rowToFlowRun(row, stepRows.map(rowToStepResult));
+}
+
+export function listFlowRuns(flowId: string, limit = 30): FlowRun[] {
+  const rows = db()
+    .prepare("SELECT * FROM flow_runs WHERE flow_id = ? ORDER BY started_at DESC LIMIT ?")
+    .all(flowId, limit) as FlowRunRow[];
+  return rows.map((r) => {
+    const stepRows = db()
+      .prepare("SELECT * FROM step_results WHERE flow_run_id = ? ORDER BY position")
+      .all(r.id) as StepResultRow[];
+    return rowToFlowRun(r, stepRows.map(rowToStepResult));
+  });
+}
+
+export function getFlowStats(flowId: string, windowMinutes: number): FlowStats {
+  const sinceMs = Date.now() - windowMinutes * 60_000;
+  const row = db()
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END) AS failed,
+              AVG(total_ms) AS avg_total
+       FROM flow_runs
+       WHERE flow_id = ? AND started_at >= ? AND ended_at IS NOT NULL`
+    )
+    .get(flowId, sinceMs) as { total: number; failed: number | null; avg_total: number | null };
+  const total = Number(row.total ?? 0);
+  const failed = Number(row.failed ?? 0);
+  return {
+    flowId,
+    windowMinutes,
+    totalRuns: total,
+    failedRuns: failed,
+    failureRatePct: total > 0 ? Number(((failed / total) * 100).toFixed(2)) : 0,
+    avgTotalMs: row.avg_total != null ? Math.round(Number(row.avg_total)) : null,
+  };
+}
+
+// ---- Variable cache (smart caching with TTL) ----
+
+export function getCachedVariables(flowId: string): Record<string, string> {
+  const now = Date.now();
+  const rows = db()
+    .prepare(
+      "SELECT variable_name, value FROM variable_cache WHERE flow_id = ? AND expires_at > ?"
+    )
+    .all(flowId, now) as { variable_name: string; value: string }[];
+  const out: Record<string, string> = {};
+  for (const r of rows) out[r.variable_name] = r.value;
+  return out;
+}
+
+export function cacheVariable(flowId: string, name: string, value: string, ttlSeconds: number): void {
+  const now = Date.now();
+  db()
+    .prepare(
+      `INSERT INTO variable_cache (flow_id, variable_name, value, captured_at, expires_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(flow_id, variable_name) DO UPDATE SET
+         value = excluded.value,
+         captured_at = excluded.captured_at,
+         expires_at = excluded.expires_at`
+    )
+    .run(flowId, name, value, now, now + ttlSeconds * 1000);
+}
+
+export function clearVariableCache(flowId: string): void {
+  db().prepare("DELETE FROM variable_cache WHERE flow_id = ?").run(flowId);
 }
 
 export function getUrlSparkline(
