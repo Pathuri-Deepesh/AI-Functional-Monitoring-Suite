@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "excel-mcp": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "excel-mcp-server",
+        "stdio"
+      ],
+      "env": {
+        "EXCEL_FILES_PATH": "C:\\Users\\dp1\\Desktop\\AI-Functional-Monitoring-Suite"
+      }
+    }
+  }
+}
