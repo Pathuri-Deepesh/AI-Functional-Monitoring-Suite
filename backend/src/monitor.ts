@@ -4,6 +4,7 @@ import { evaluateAssertions } from "./assertions.js";
 import {
   getProject,
   getUrl,
+  listFlows,
   listProjects,
   listUrls,
   recordCheck,
@@ -11,6 +12,7 @@ import {
 } from "./store.js";
 import { pruneOldChecks } from "./db.js";
 import { timedFetch } from "./timing.js";
+import { runFlow } from "./flowRunner.js";
 import type { FullSnapshot, MonitoredUrl, StatusGroup } from "./types.js";
 
 const TICK_MS = 30_000;
@@ -109,13 +111,28 @@ export function checkOne(urlId: string): Promise<MonitoredUrl | undefined> {
 
 export async function tick(): Promise<void> {
   const now = Date.now();
-  const due: MonitoredUrl[] = [];
+
+  // 1) Due standalone URLs
+  const dueUrls: MonitoredUrl[] = [];
   for (const u of listUrls()) {
     const intervalMs = Math.max(60_000, u.intervalMinutes * 60_000);
     const last = u.lastChecked ? Date.parse(u.lastChecked) : 0;
-    if (!last || now - last >= intervalMs) due.push(u);
+    if (!last || now - last >= intervalMs) dueUrls.push(u);
   }
-  await Promise.all(due.map((u) => checkOne(u.id)));
+
+  // 2) Due flows (whole flow runs atomically when its interval has elapsed)
+  const dueFlowIds: string[] = [];
+  for (const flow of listFlows()) {
+    if (!flow.enabled) continue;
+    const intervalMs = Math.max(60_000, flow.intervalMinutes * 60_000);
+    const last = flow.lastRunAt ?? 0;
+    if (!last || now - last >= intervalMs) dueFlowIds.push(flow.id);
+  }
+
+  await Promise.all([
+    ...dueUrls.map((u) => checkOne(u.id)),
+    ...dueFlowIds.map((id) => runFlow(id)),
+  ]);
 }
 
 /**

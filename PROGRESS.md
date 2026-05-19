@@ -69,6 +69,39 @@
 - [x] **12.6** Smooth transitions on status pills, KPIs, chips — *2026-05-12*
 - [x] **12.7** Consistent focus-visible rings (keyboard a11y) — *2026-05-12*
 - [x] **12.8** Reduced-motion media query (respects user prefs) — *2026-05-12*
+
+## Phase 1.13 — Flows (API chaining) ✅ Complete
+
+- [x] **13.1** Backend: flow tables (flows, flow_steps, flow_runs, step_results, variable_cache) — *2026-05-19*
+- [x] **13.2** Backend: extraction.ts with mini JSONPath + headers + status — *2026-05-19*
+- [x] **13.3** Backend: variable substitution `{{name}}` in URL/headers/body/params — *2026-05-19*
+- [x] **13.4** Backend: flowRunner.ts atomic execution + stop-on-failure — *2026-05-19*
+- [x] **13.5** Backend: smart caching with TTL (skip step if vars still fresh) — *2026-05-19*
+- [x] **13.6** Backend: per-step retries with exponential backoff — *2026-05-19*
+- [x] **13.7** Backend: custom wait between steps for async APIs — *2026-05-19*
+- [x] **13.8** Backend: monitor scheduler runs due flows atomically — *2026-05-19*
+- [x] **13.9** Backend: Slack alert on flow failure — *2026-05-19*
+- [x] **13.10** Backend: 13 REST endpoints (flows/steps/runs/cache) — *2026-05-19*
+- [x] **13.11** Frontend: FlowEditor modal (name/interval/stop-on-failure) — *2026-05-19*
+- [x] **13.12** Frontend: StepEditor modal with 7 tabs (incl. Extract + Retry) — *2026-05-19*
+- [x] **13.13** Frontend: Variables hint shows available `{{vars}}` from prior steps — *2026-05-19*
+- [x] **13.14** Frontend: FlowCard with expandable step list + per-step results — *2026-05-19*
+- [x] **13.15** Frontend: Run Now button with spinner + last-run timestamp — *2026-05-19*
+- [x] **13.16** Frontend: Flows section integrated above Standalone URLs — *2026-05-19*
+- [x] **13.17** UX: wrap Flows + URLs in visual section panels (Notion/Linear style) — *2026-05-19*
+- [x] **13.18** UX: GitHub-style tab navigation with count badges + active underline — *2026-05-19*
+- [x] **13.19** UX: URL hash persistence (#urls / #flows) + danger badge on failing count — *2026-05-19*
+- [x] **13.20** UX: switching projects in sidebar resets to URLs tab (deep-link still works on refresh) — *2026-05-19*
+- [x] **13.21** UX: tighten vertical rhythm (12px gaps) + extra breath before section panel — *2026-05-19*
+- [x] **13.22** Backend: Run Audit now includes flows (re-runs all enabled flows) — *2026-05-19*
+- [x] **13.23** Backend: HTML report has dedicated Flows table section + 4 KPIs with breakdown — *2026-05-19*
+- [x] **13.24** Backend: Slack Block Kit message split into URL track + Flow track — *2026-05-19*
+- [x] **13.25** Backend: store extends list queries with lastRunOk + lastRunTotalMs via correlated subquery — *2026-05-19*
+- [x] **13.26** Frontend: KpiBar flow-aware (Endpoints label + breakdowns) with graceful no-flows fallback — *2026-05-19*
+- [x] **13.27** Frontend: Audit result modal shows dual-track URL/Flow breakdown — *2026-05-19*
+- [x] **13.28** Frontend: Flows tab gets mini-KPI strip (Total/Healthy/Failing/Avg run/Last run) — *2026-05-19*
+- [x] **13.29** UX: Flow KPI strip enlarged + tooltips on every cell + shows which flow last ran — *2026-05-19*
+- [x] **13.30** Fix: Flow KPI strip auto-updates after Run Now (no page refresh needed) — *2026-05-19*
 - [x] **5.9** Dynamic axis labels (hours/days/dates) based on selected window — *2026-05-12*
 
 ## Phase 1.9 — Postman parity ✅ Complete

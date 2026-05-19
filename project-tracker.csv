@@ -44,6 +44,36 @@
 12.6,Phase 1.12 - UX polish,Smooth transitions on status pills + KPIs + chips,Done,2026-05-12,No more abrupt color/value snaps
 12.7,Phase 1.12 - UX polish,Consistent focus-visible rings across interactive elements,Done,2026-05-12,Keyboard navigation accessibility
 12.8,Phase 1.12 - UX polish,Reduced-motion media query (a11y),Done,2026-05-12,Respects prefers-reduced-motion
+13.1,Phase 1.13 - Flows (API chaining),Backend: flows + flow_steps + flow_runs + step_results + variable_cache tables,Done,2026-05-19,SQLite schema with full FK relations
+13.2,Phase 1.13 - Flows (API chaining),Backend: extraction.ts with mini JSONPath + header + status capture,Done,2026-05-19,Zero deps; supports $.foo.bar / arrays / quoted keys
+13.3,Phase 1.13 - Flows (API chaining),Backend: variable substitution ({{name}} in URL/headers/body/params),Done,2026-05-19,Find-and-replace before sending
+13.4,Phase 1.13 - Flows (API chaining),Backend: flowRunner.ts - atomic execution + stop-on-failure + skip cascade,Done,2026-05-19,Industry standard atomic flow execution
+13.5,Phase 1.13 - Flows (API chaining),Backend: smart caching with TTL (skip step if all vars still fresh),Done,2026-05-19,Massive cost saver - don't re-login if token valid
+13.6,Phase 1.13 - Flows (API chaining),Backend: per-step retries with exponential backoff,Done,2026-05-19,Kills false alerts from network blips
+13.7,Phase 1.13 - Flows (API chaining),Backend: custom wait between steps for async APIs,Done,2026-05-19,POST job -> wait 5s -> poll status
+13.8,Phase 1.13 - Flows (API chaining),Backend: monitor scheduler extended to run due flows atomically,Done,2026-05-19,One interval per flow not per step
+13.9,Phase 1.13 - Flows (API chaining),Backend: Slack alert on flow failure (per-project webhook),Done,2026-05-19,Reuses existing slack.ts
+13.10,Phase 1.13 - Flows (API chaining),Backend: 13 REST endpoints (flows/steps/runs/cache CRUD),Done,2026-05-19,Full CRUD + reorder + manual trigger
+13.11,Phase 1.13 - Flows (API chaining),Frontend: FlowEditor modal (name/interval/stop-on-failure),Done,2026-05-19,Create + edit + enable/disable
+13.12,Phase 1.13 - Flows (API chaining),Frontend: StepEditor modal with 7 tabs (Basics/Params/Headers/Body/Assertions/Extract/Retry),Done,2026-05-19,Full Postman parity + extractions + retries
+13.13,Phase 1.13 - Flows (API chaining),Frontend: Variables hint shows available {{vars}} from prior steps,Done,2026-05-19,Self-documenting flow editor
+13.14,Phase 1.13 - Flows (API chaining),Frontend: FlowCard with expandable step list + per-step results,Done,2026-05-19,One run shown inline; click step to edit
+13.15,Phase 1.13 - Flows (API chaining),Frontend: Run Now button with spinner + last-run timestamp,Done,2026-05-19,Manual trigger from UI
+13.16,Phase 1.13 - Flows (API chaining),Frontend: Flows section integrated above Standalone URLs in ProjectView,Done,2026-05-19,Clean separation of flows vs independent URLs
+13.17,Phase 1.13 - Flows (API chaining),UX: wrap Flows + URLs in visual section panels with header/count/actions,Done,2026-05-19,Notion/Linear style - fixes orphaned search bar issue
+13.18,Phase 1.13 - Flows (API chaining),UX: GitHub-style tab navigation (Standalone URLs / Flows) with count badges + active underline,Done,2026-05-19,Each tab has its own search/filters - scales to many items
+13.19,Phase 1.13 - Flows (API chaining),UX: URL hash persistence for tabs (#urls / #flows) + danger badge on failing count,Done,2026-05-19,Refresh stays on same tab; bookmarkable; failures visible without switching
+13.20,Phase 1.13 - Flows (API chaining),UX: switching projects in sidebar resets to URLs tab (deep-link still respected on refresh),Done,2026-05-19,Fixes confusing "I was on Flows in A; clicking B opens Flows in B too"
+13.21,Phase 1.13 - Flows (API chaining),UX: tighten vertical rhythm (main gap 24px->12px) + breathing room before section panel,Done,2026-05-19,Less visual clutter; rests where rests are needed
+13.22,Phase 1.13 - Flows (API chaining),Backend: Run Audit now includes flows (re-runs all enabled flows alongside URL checks),Done,2026-05-19,Single button audits everything in project
+13.23,Phase 1.13 - Flows (API chaining),Backend: HTML report has dedicated Flows table section + 4 KPIs with breakdown,Done,2026-05-19,URLs section + Flows section + per-step status badges
+13.24,Phase 1.13 - Flows (API chaining),Backend: Slack Block Kit message split into URL track + Flow track,Done,2026-05-19,Dual stats row + separate failing lists for each type
+13.25,Phase 1.13 - Flows (API chaining),Backend: store extends list queries with lastRunOk + lastRunTotalMs via correlated subquery,Done,2026-05-19,Single SQL roundtrip - no N+1 issue
+13.26,Phase 1.13 - Flows (API chaining),Frontend: KpiBar flow-aware (Endpoints label + breakdowns) with graceful no-flows fallback,Done,2026-05-19,Single bar tells full story
+13.27,Phase 1.13 - Flows (API chaining),Frontend: Audit result modal shows dual-track URL/Flow breakdown,Done,2026-05-19,Clear separation in result feedback
+13.28,Phase 1.13 - Flows (API chaining),Frontend: Flows tab gets mini-KPI strip (Total/Healthy/Failing/Avg run/Last run),Done,2026-05-19,Flow-level health at a glance
+13.29,Phase 1.13 - Flows (API chaining),UX: Flow KPI strip enlarged + tooltips on every cell + show which flow last ran,Done,2026-05-19,Last run cell shows flow name as subtext; all cells hover-explained
+13.30,Phase 1.13 - Flows (API chaining),Fix: Flow KPI strip auto-updates after Run Now (no page refresh needed),Done,2026-05-19,FlowCard onAfterRun callback bumps a flows-refresh tick in ProjectView
 5.9,Phase 1.8 - History UI,Dynamic axis labels (hours/days/dates) based on window,Done,2026-05-12,Activity Timeline auto-formats
 6.1,Phase 1.9 - Postman parity,HTTP method support (GET/POST/PUT/PATCH),Done,2026-05-11,DELETE blocked for safety
 6.2,Phase 1.9 - Postman parity,Body editor with type selector,Done,2026-05-11,JSON / form / urlencoded

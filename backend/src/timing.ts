@@ -9,6 +9,7 @@ export interface TimedResult {
   statusCode: number | null;
   timings: Timings;
   responseBody: string; // up to MAX_BODY_BYTES
+  responseHeaders: Record<string, string>; // lowercase keys
   error: unknown | null;
 }
 
@@ -29,7 +30,13 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
     try {
       parsed = new URL(spec.url);
     } catch {
-      resolve({ statusCode: null, timings: emptyTimings(), responseBody: "", error: new Error("Invalid URL") });
+      resolve({
+        statusCode: null,
+        timings: emptyTimings(),
+        responseBody: "",
+        responseHeaders: {},
+        error: new Error("Invalid URL"),
+      });
       return;
     }
 
@@ -83,6 +90,13 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
         marks.response = Date.now();
         const statusCode = res.statusCode ?? null;
 
+        // Collect response headers (lowercase keys, joined values for arrays)
+        const responseHeaders: Record<string, string> = {};
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (v == null) continue;
+          responseHeaders[k.toLowerCase()] = Array.isArray(v) ? v.join(", ") : String(v);
+        }
+
         const chunks: Buffer[] = [];
         let drained = 0;
         let truncated = false;
@@ -91,7 +105,6 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
           if (!truncated && drained <= MAX_BODY_BYTES) {
             chunks.push(chunk);
           } else if (!truncated) {
-            // Capture only up to the cap, then drop further data
             const remaining = MAX_BODY_BYTES - (drained - chunk.length);
             if (remaining > 0) chunks.push(chunk.subarray(0, remaining));
             truncated = true;
@@ -104,6 +117,7 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
             statusCode,
             timings: buildTimings(start, marks),
             responseBody: body,
+            responseHeaders,
             error: null,
           });
         });
@@ -130,6 +144,7 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
         statusCode: null,
         timings: buildTimings(start, marks),
         responseBody: "",
+        responseHeaders: {},
         error: err,
       });
     });

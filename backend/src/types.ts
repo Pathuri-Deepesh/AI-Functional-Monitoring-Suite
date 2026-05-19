@@ -119,3 +119,113 @@ export interface FullSnapshot {
   total: number;
   lastUpdated: string;
 }
+
+// =============================================================
+// FLOWS — chained API requests with variable extraction
+// =============================================================
+
+export type ExtractionSource = "body" | "header" | "status";
+
+export interface Extraction {
+  id: string;
+  source: ExtractionSource;
+  /** JSONPath like `$.auth.token` for body; header name for header; ignored for status. */
+  path: string;
+  /** Variable name (e.g. `auth_token`) — referenced as `{{auth_token}}` in later steps. */
+  saveAs: string;
+  /** Optional TTL in seconds; when set, the value is reused across flow runs while still fresh. */
+  ttlSeconds?: number | null;
+}
+
+export interface FlowStep {
+  id: string;
+  flowId: string;
+  position: number;
+  description: string;
+
+  // Request spec (mirrors MonitoredUrl)
+  url: string;
+  method: HttpMethod;
+  bodyType: BodyType;
+  body: string;
+  bodyContentType: string;
+  apiKeyId: string | null;
+  customHeaders: KeyValue[];
+  queryParams: KeyValue[];
+  assertions: Assertion[];
+
+  // Flow-specific
+  extractions: Extraction[];
+  /** Milliseconds to wait after the previous step finishes before sending this one. */
+  waitBeforeMs: number;
+  /** Number of retry attempts on failure (excluding the initial attempt). */
+  maxRetries: number;
+  /** Initial backoff between retries; doubled after each failed retry. */
+  retryBackoffMs: number;
+}
+
+export interface Flow {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string;
+  intervalMinutes: number;
+  stopOnFailure: boolean;
+  enabled: boolean;
+  lastRunAt: number | null;
+  /** OK state of the most recent run. null = never run. */
+  lastRunOk: boolean | null;
+  /** Duration of the most recent run (ms). null = never run. */
+  lastRunTotalMs: number | null;
+  createdAt: string;
+}
+
+export interface FlowWithSteps extends Flow {
+  steps: FlowStep[];
+}
+
+export interface ExtractedValue {
+  saveAs: string;
+  value: string;
+  fromCache: boolean;
+}
+
+export interface StepResult {
+  id: string;
+  flowRunId: string;
+  stepId: string;
+  position: number;
+  statusCode: number | null;
+  statusGroup: StatusGroup | null;
+  errorReason: string | null;
+  timings: Timings;
+  assertionResults: AssertionResult[];
+  extractedValues: ExtractedValue[];
+  attempts: number;
+  skipped: boolean;
+  skipReason: string | null;
+  ok: boolean;
+  checkedAt: number;
+}
+
+export interface FlowRun {
+  id: string;
+  flowId: string;
+  startedAt: number;
+  endedAt: number | null;
+  ok: boolean;
+  failedAtStepId: string | null;
+  totalMs: number | null;
+  /** Snapshot of all variables at run completion. */
+  variables: Record<string, string>;
+  stepResults: StepResult[];
+}
+
+export interface FlowStats {
+  flowId: string;
+  windowMinutes: number;
+  totalRuns: number;
+  failedRuns: number;
+  failureRatePct: number;
+  avgTotalMs: number | null;
+}

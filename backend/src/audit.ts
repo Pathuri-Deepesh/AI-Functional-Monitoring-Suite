@@ -5,24 +5,40 @@ import {
   getProject,
   getUrlSparkline,
   getUrlStats,
+  listFlowRuns,
+  listFlowsByProject,
   listUrlsByProject,
 } from "./store.js";
 import { checkAllInProject } from "./monitor.js";
+import { runFlow } from "./flowRunner.js";
 import { renderReportHtml } from "./report.js";
 import { sendAuditToSlack } from "./slack.js";
-import type { MonitoredUrl, UrlStats } from "./types.js";
+import type { Flow, FlowRun, UrlStats } from "./types.js";
 
 export interface AuditResult {
   projectId: string;
   reportFilename: string;
   reportPath: string;
-  reportUrl: string; // local URL like http://localhost:4000/reports/abc.html
+  reportUrl: string;
+  // URL counts
   totalUrls: number;
   failingUrls: number;
   okUrls: number;
+  // Flow counts (NEW)
+  totalFlows: number;
+  failingFlows: number;
+  okFlows: number;
+  // Slack
   slack: { posted: boolean; reason?: string };
 }
 
+/**
+ * Run an audit on a project:
+ *   1. Re-check every standalone URL (in parallel, capped at 8)
+ *   2. Re-run every enabled flow (in parallel — each flow's steps run sequentially)
+ *   3. Generate an HTML report covering both
+ *   4. Deliver via Slack (Block Kit + file upload if bot token; webhook fallback)
+ */
 export async function runAuditAndDeliver(
   projectId: string,
   reportsDir: string,
@@ -31,40 +47,56 @@ export async function runAuditAndDeliver(
   const project = getProject(projectId);
   if (!project) throw new Error("Project not found");
 
-  // 1. Re-check every URL in the project right now
-  await checkAllInProject(projectId, 8);
-  const urls = listUrlsByProject(projectId);
+  // 1. Re-check URLs + re-run flows in parallel (independent work)
+  const urlsTask = checkAllInProject(projectId, 8);
+  const flows = listFlowsByProject(projectId).filter((f) => f.enabled);
+  const flowRunsTask = Promise.all(flows.map((f) => runFlow(f.id)));
 
-  // 2. Compute 24h stats per URL for the report
+  await Promise.all([urlsTask, flowRunsTask]);
+
+  // 2. Load URLs + per-URL stats + sparklines (24h window) for the report
+  const urls = listUrlsByProject(projectId);
   const stats: Record<string, UrlStats> = {};
-  for (const u of urls) {
-    stats[u.id] = getUrlStats(u.id, 24 * 60);
-  }
+  for (const u of urls) stats[u.id] = getUrlStats(u.id, 24 * 60);
   const sparklines: Record<string, number[]> = {};
   for (const u of urls) {
     sparklines[u.id] = getUrlSparkline(u.id, 24 * 60, 24).map((p) => p.avgLatencyMs ?? 0);
   }
 
-  // 3. Render HTML and write to disk
-  const html = renderReportHtml({ project, urls, stats, sparklines });
+  // 3. Load flows + their latest runs for the report
+  const flowSummaries: Array<{ flow: Flow; latestRun: FlowRun | null }> = [];
+  for (const f of listFlowsByProject(projectId)) {
+    const runs = listFlowRuns(f.id, 1);
+    flowSummaries.push({ flow: f, latestRun: runs[0] ?? null });
+  }
+
+  // 4. Render HTML
+  const html = renderReportHtml({ project, urls, stats, sparklines, flowSummaries });
   const filename = `${slugify(project.name)}-${stamp()}-${randomUUID().slice(0, 8)}.html`;
   const reportPath = join(reportsDir, filename);
   writeFileSync(reportPath, html, "utf8");
   const reportUrl = `${baseUrl}/reports/${filename}`;
 
-  // 4. Stats summary
+  // 5. Aggregate counts
   const failingUrls = urls.filter(
     (u) => u.statusGroup === "error" || u.statusGroup === "5xx" || u.statusGroup === "4xx"
   ).length;
   const okUrls = urls.length - failingUrls;
 
-  // 5. Send to Slack (Bot token + Block Kit + file upload preferred; falls back to webhook)
+  const failingFlows = flowSummaries.filter((s) => s.latestRun?.ok === false).length;
+  const okFlows = flowSummaries.filter((s) => s.latestRun?.ok === true).length;
+  const totalFlows = flowSummaries.length;
+
+  // 6. Slack delivery
   const slack = await sendAuditToSlack({
     project,
     urls,
     stats,
+    flowSummaries,
     failingUrls,
     okUrls,
+    failingFlows,
+    okFlows,
     reportUrl,
     reportPath,
     reportFilename: filename,
@@ -78,6 +110,9 @@ export async function runAuditAndDeliver(
     totalUrls: urls.length,
     failingUrls,
     okUrls,
+    totalFlows,
+    failingFlows,
+    okFlows,
     slack,
   };
 }

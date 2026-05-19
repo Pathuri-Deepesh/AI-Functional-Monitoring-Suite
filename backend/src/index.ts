@@ -4,23 +4,40 @@ import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   addApiKey,
+  addFlowStep,
   addUrl,
+  clearVariableCache,
+  createFlow,
   createProject,
+  deleteFlow,
+  deleteFlowStep,
   deleteProject,
+  getCachedVariables,
+  getFlow,
+  getFlowRun,
+  getFlowStats,
+  getFlowStep,
+  getFlowWithSteps,
   getProject,
   getUrl,
   getUrlSparkline,
   getUrlStats,
   listChecksForUrl,
+  listFlowRuns,
+  listFlowsByProject,
   listProjects,
   listUrlsByProject,
   removeApiKey,
   removeUrl,
+  reorderFlowSteps,
+  updateFlow,
+  updateFlowStep,
   updateProject,
   updateUrl,
 } from "./store.js";
-import { checkAllInProject, checkOne, snapshot, startMonitorLoop } from "./monitor.js";
+import { checkOne, snapshot, startMonitorLoop } from "./monitor.js";
 import { runAuditAndDeliver } from "./audit.js";
+import { runFlow } from "./flowRunner.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -214,6 +231,150 @@ app.post("/api/projects/:id/audit", async (req, res) => {
 
 app.get("/api/projects/:id/check-all", async (_req, res) => {
   res.status(405).json({ error: "Use POST /api/projects/:id/audit" });
+});
+
+// ---------- Flows ----------
+app.get("/api/projects/:projectId/flows", (req, res) => {
+  const project = getProject(req.params.projectId);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  res.json(listFlowsByProject(req.params.projectId));
+});
+
+app.post("/api/projects/:projectId/flows", (req, res) => {
+  try {
+    const { name, description, intervalMinutes, stopOnFailure, enabled } = req.body ?? {};
+    if (typeof name !== "string" || !name.trim()) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const created = createFlow({
+      projectId: req.params.projectId,
+      name,
+      description,
+      intervalMinutes,
+      stopOnFailure,
+      enabled,
+    });
+    res.status(201).json(created);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.get("/api/flows/:id", (req, res) => {
+  const flow = getFlowWithSteps(req.params.id);
+  if (!flow) {
+    res.status(404).json({ error: "Flow not found" });
+    return;
+  }
+  res.json(flow);
+});
+
+app.patch("/api/flows/:id", (req, res) => {
+  const updated = updateFlow(req.params.id, req.body ?? {});
+  if (!updated) {
+    res.status(404).json({ error: "Flow not found" });
+    return;
+  }
+  res.json(updated);
+});
+
+app.delete("/api/flows/:id", (req, res) => {
+  const ok = deleteFlow(req.params.id);
+  if (!ok) {
+    res.status(404).json({ error: "Flow not found" });
+    return;
+  }
+  res.status(204).end();
+});
+
+// ---------- Flow Steps ----------
+app.post("/api/flows/:flowId/steps", (req, res) => {
+  try {
+    const created = addFlowStep({ flowId: req.params.flowId, ...(req.body ?? {}) });
+    res.status(201).json(created);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.patch("/api/steps/:id", (req, res) => {
+  try {
+    const updated = updateFlowStep(req.params.id, req.body ?? {});
+    if (!updated) {
+      res.status(404).json({ error: "Step not found" });
+      return;
+    }
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.delete("/api/steps/:id", (req, res) => {
+  const ok = deleteFlowStep(req.params.id);
+  if (!ok) {
+    res.status(404).json({ error: "Step not found" });
+    return;
+  }
+  res.status(204).end();
+});
+
+app.post("/api/flows/:flowId/steps/reorder", (req, res) => {
+  const ids = req.body?.orderedIds;
+  if (!Array.isArray(ids)) {
+    res.status(400).json({ error: "orderedIds (string[]) is required" });
+    return;
+  }
+  reorderFlowSteps(req.params.flowId, ids);
+  res.json({ ok: true });
+});
+
+// ---------- Flow Runs ----------
+app.post("/api/flows/:id/run", async (req, res) => {
+  const flow = getFlow(req.params.id);
+  if (!flow) {
+    res.status(404).json({ error: "Flow not found" });
+    return;
+  }
+  try {
+    const result = await runFlow(flow.id);
+    res.json(result ?? null);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.get("/api/flows/:id/runs", (req, res) => {
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
+  res.json(listFlowRuns(req.params.id, limit));
+});
+
+app.get("/api/flow-runs/:id", (req, res) => {
+  const run = getFlowRun(req.params.id);
+  if (!run) {
+    res.status(404).json({ error: "Flow run not found" });
+    return;
+  }
+  res.json(run);
+});
+
+app.get("/api/flows/:id/stats", (req, res) => {
+  const windowMinutes = Number(req.query.windowMinutes) || 24 * 60;
+  res.json(getFlowStats(req.params.id, windowMinutes));
+});
+
+// ---------- Variable cache (smart caching with TTL) ----------
+app.get("/api/flows/:id/cache", (req, res) => {
+  res.json(getCachedVariables(req.params.id));
+});
+
+app.delete("/api/flows/:id/cache", (req, res) => {
+  clearVariableCache(req.params.id);
+  res.status(204).end();
 });
 
 startMonitorLoop();

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { checkUrlNow, deleteProject, fetchStatus, removeUrl, runAudit } from "./api";
+import { checkUrlNow, deleteFlow, deleteProject, fetchFlow, fetchStatus, removeUrl, runAudit } from "./api";
 import { Sidebar } from "./components/Sidebar";
 import { ProjectView } from "./components/ProjectView";
 import { ConfirmDialog, Modal, ToastStack, type ToastItem } from "./components/Modal";
@@ -11,7 +11,8 @@ import {
   CreateProjectForm,
   SettingsForm,
 } from "./components/forms";
-import type { AuditResult, FullSnapshot, Project } from "./types";
+import { FlowEditorForm, StepEditorForm } from "./components/flowForms";
+import type { AuditResult, Flow, FlowStep, FlowWithSteps, FullSnapshot, Project } from "./types";
 
 const POLL_MS = 3000;
 
@@ -24,7 +25,12 @@ type ModalState =
   | { kind: "confirm-delete-project"; project: Project }
   | { kind: "confirm-delete-url"; urlId: string; urlText: string }
   | { kind: "audit-running"; projectName: string }
-  | { kind: "audit-result"; result: AuditResult; projectName: string };
+  | { kind: "audit-result"; result: AuditResult; projectName: string }
+  | { kind: "create-flow"; project: Project }
+  | { kind: "edit-flow"; project: Project; flow: Flow }
+  | { kind: "add-step"; project: Project; flowDetail: FlowWithSteps }
+  | { kind: "edit-step"; project: Project; flowDetail: FlowWithSteps; step: FlowStep }
+  | { kind: "confirm-delete-flow"; flow: Flow };
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<FullSnapshot | null>(null);
@@ -34,6 +40,23 @@ export default function App() {
   const [refreshTick, setRefreshTick] = useState(0);
   const toastSeq = useRef(0);
   const timer = useRef<number | null>(null);
+
+  /**
+   * Switch to a project AND reset the section tab to "urls" (the default).
+   * Reason: when the user explicitly clicks a different project, they expect
+   * to start fresh on the most common section — not land on Flows just because
+   * that's what they were viewing in the previous project.
+   * (Direct page refresh still respects the #urls / #flows hash for deep linking.)
+   */
+  function selectProject(id: string) {
+    if (id === activeProjectId) return;
+    if (window.location.hash !== "#urls") {
+      window.history.replaceState(null, "", "#urls");
+      // Dispatch hashchange so ProjectView's listener picks it up if it doesn't remount in time.
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+    setActiveProjectId(id);
+  }
 
   function pushToast(message: string, kind: ToastItem["kind"] = "success") {
     const id = ++toastSeq.current;
@@ -119,6 +142,34 @@ export default function App() {
     }
   }
 
+  async function openAddStep(flow: Flow) {
+    if (!activeProject) return;
+    const detail = await fetchFlow(flow.id);
+    setModal({ kind: "add-step", project: activeProject, flowDetail: detail });
+  }
+
+  async function openEditStep(flow: Flow, stepId: string) {
+    if (!activeProject) return;
+    const detail = await fetchFlow(flow.id);
+    const step = detail.steps.find((s) => s.id === stepId);
+    if (!step) return;
+    setModal({ kind: "edit-step", project: activeProject, flowDetail: detail, step });
+  }
+
+  async function confirmDeleteFlow() {
+    if (modal.kind !== "confirm-delete-flow") return;
+    try {
+      await deleteFlow(modal.flow.id);
+      pushToast(`Flow "${modal.flow.name}" deleted`);
+      await refresh();
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      pushToast(e instanceof Error ? e.message : "Failed to delete flow", "error");
+    } finally {
+      setModal({ kind: "none" });
+    }
+  }
+
   async function handleRunAudit() {
     if (!activeProject) return;
     setModal({ kind: "audit-running", projectName: activeProject.name });
@@ -156,7 +207,7 @@ export default function App() {
         projects={snapshot?.projects ?? []}
         urls={snapshot?.urls ?? []}
         activeProjectId={activeProjectId}
-        onSelect={setActiveProjectId}
+        onSelect={selectProject}
         onCreate={() => setModal({ kind: "create-project" })}
       />
 
@@ -176,6 +227,11 @@ export default function App() {
           auditRunning={modal.kind === "audit-running"}
           onCheckUrl={handleCheckUrl}
           onRemoveUrl={handleDeleteUrl}
+          onCreateFlow={() => setModal({ kind: "create-flow", project: activeProject })}
+          onEditFlow={(flow) => setModal({ kind: "edit-flow", project: activeProject, flow })}
+          onAddStep={openAddStep}
+          onEditStep={openEditStep}
+          onDeleteFlow={(flow) => setModal({ kind: "confirm-delete-flow", flow })}
         />
       ) : (
         <main className="main">
@@ -267,6 +323,75 @@ export default function App() {
         onCancel={() => setModal({ kind: "none" })}
       />
 
+      <Modal
+        open={modal.kind === "create-flow" || modal.kind === "edit-flow"}
+        title={modal.kind === "edit-flow" ? "Edit flow" : "New flow"}
+        subtitle={
+          modal.kind === "create-flow"
+            ? `A flow is a sequence of dependent APIs that share captured variables.`
+            : modal.kind === "edit-flow"
+            ? `In project: ${modal.project.name}`
+            : undefined
+        }
+        onClose={() => setModal({ kind: "none" })}
+      >
+        {modal.kind === "create-flow" && (
+          <FlowEditorForm project={modal.project} onDone={handleFormDone} onError={(m) => pushToast(m, "error")} />
+        )}
+        {modal.kind === "edit-flow" && (
+          <FlowEditorForm
+            project={modal.project}
+            flow={modal.flow}
+            onDone={handleFormDone}
+            onError={(m) => pushToast(m, "error")}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        open={modal.kind === "add-step" || modal.kind === "edit-step"}
+        title={modal.kind === "edit-step" ? `Edit step ${modal.step.position}` : "Add step to flow"}
+        subtitle={
+          modal.kind === "add-step" || modal.kind === "edit-step"
+            ? `Flow: ${modal.flowDetail.name}`
+            : undefined
+        }
+        onClose={() => setModal({ kind: "none" })}
+        size="lg"
+      >
+        {modal.kind === "add-step" && (
+          <StepEditorForm
+            flow={modal.flowDetail}
+            project={modal.project}
+            onDone={handleFormDone}
+            onError={(m) => pushToast(m, "error")}
+          />
+        )}
+        {modal.kind === "edit-step" && (
+          <StepEditorForm
+            flow={modal.flowDetail}
+            project={modal.project}
+            step={modal.step}
+            onDone={handleFormDone}
+            onError={(m) => pushToast(m, "error")}
+          />
+        )}
+      </Modal>
+
+      <ConfirmDialog
+        open={modal.kind === "confirm-delete-flow"}
+        title="Delete flow?"
+        message={
+          modal.kind === "confirm-delete-flow"
+            ? `Delete "${modal.flow.name}"? All its steps and run history will be lost.`
+            : ""
+        }
+        confirmLabel="Delete flow"
+        destructive
+        onConfirm={confirmDeleteFlow}
+        onCancel={() => setModal({ kind: "none" })}
+      />
+
       <ConfirmDialog
         open={modal.kind === "confirm-delete-url"}
         title="Remove URL?"
@@ -303,44 +428,90 @@ export default function App() {
         subtitle={modal.kind === "audit-result" ? `Project: ${modal.projectName}` : undefined}
         onClose={() => setModal({ kind: "none" })}
       >
-        {modal.kind === "audit-result" && (
+        {modal.kind === "audit-result" && (() => {
+          const r = modal.result;
+          const totalChecked = r.totalUrls + r.totalFlows;
+          const totalOk = r.okUrls + r.okFlows;
+          const totalFailing = r.failingUrls + r.failingFlows;
+          const hasFlows = r.totalFlows > 0;
+          return (
           <div className="audit-result">
+            {/* Top summary — combined */}
             <div className="audit-summary">
               <div className="audit-stat">
-                <div className="audit-num">{modal.result.totalUrls}</div>
+                <div className="audit-num">{totalChecked}</div>
                 <div className="audit-lbl">Endpoints checked</div>
+                {hasFlows && (
+                  <div className="audit-breakdown">
+                    {r.totalUrls} URLs · {r.totalFlows} flows
+                  </div>
+                )}
               </div>
               <div className="audit-stat">
                 <div className="audit-num" style={{ color: "var(--g-2xx)" }}>
-                  {modal.result.okUrls}
+                  {totalOk}
                 </div>
                 <div className="audit-lbl">Healthy</div>
+                {hasFlows && (
+                  <div className="audit-breakdown">
+                    {r.okUrls} URLs · {r.okFlows} flows
+                  </div>
+                )}
               </div>
               <div className="audit-stat">
                 <div
                   className="audit-num"
-                  style={{ color: modal.result.failingUrls > 0 ? "var(--g-5xx)" : "var(--g-2xx)" }}
+                  style={{ color: totalFailing > 0 ? "var(--g-5xx)" : "var(--g-2xx)" }}
                 >
-                  {modal.result.failingUrls}
+                  {totalFailing}
                 </div>
                 <div className="audit-lbl">Failing</div>
+                {hasFlows && (
+                  <div className="audit-breakdown">
+                    {r.failingUrls} URLs · {r.failingFlows} flows
+                  </div>
+                )}
               </div>
             </div>
+
+            {/* Split track — explicit URL vs Flow rows */}
+            {hasFlows && (
+              <div className="audit-tracks">
+                <div className="audit-track">
+                  <span className="audit-track-icon">🔗</span>
+                  <span className="audit-track-label">Standalone URLs</span>
+                  <span className="audit-track-ok">{r.okUrls} OK</span>
+                  <span className={`audit-track-fail ${r.failingUrls > 0 ? "danger" : ""}`}>
+                    {r.failingUrls} failing
+                  </span>
+                  <span className="audit-track-of">of {r.totalUrls}</span>
+                </div>
+                <div className="audit-track">
+                  <span className="audit-track-icon">📋</span>
+                  <span className="audit-track-label">Flows</span>
+                  <span className="audit-track-ok">{r.okFlows} OK</span>
+                  <span className={`audit-track-fail ${r.failingFlows > 0 ? "danger" : ""}`}>
+                    {r.failingFlows} failing
+                  </span>
+                  <span className="audit-track-of">of {r.totalFlows}</span>
+                </div>
+              </div>
+            )}
 
             <div className="audit-actions">
               <a
                 className="audit-link"
-                href={modal.result.reportUrl}
+                href={r.reportUrl}
                 target="_blank"
                 rel="noreferrer"
               >
                 📄 Open HTML report
               </a>
-              {modal.result.slack.posted ? (
+              {r.slack.posted ? (
                 <div className="audit-slack good">✅ Posted to Slack</div>
               ) : (
                 <div className="audit-slack neutral">
-                  ℹ️ Slack: {modal.result.slack.reason ?? "not configured"}
+                  ℹ️ Slack: {r.slack.reason ?? "not configured"}
                 </div>
               )}
             </div>
@@ -351,7 +522,8 @@ export default function App() {
               </button>
             </div>
           </div>
-        )}
+          );
+        })()}
       </Modal>
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
