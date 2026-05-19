@@ -1,5 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { checkUrlNow, deleteFlow, deleteProject, fetchFlow, fetchStatus, removeUrl, runAudit } from "./api";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  checkUrlNow,
+  deleteFlow,
+  deleteProject,
+  fetchFlow,
+  fetchProjectVariables,
+  fetchStatus,
+  removeUrl,
+  runAudit,
+} from "./api";
 import { Sidebar } from "./components/Sidebar";
 import { ProjectView } from "./components/ProjectView";
 import { ConfirmDialog, Modal, ToastStack, type ToastItem } from "./components/Modal";
@@ -11,10 +20,37 @@ import {
   CreateProjectForm,
   SettingsForm,
 } from "./components/forms";
-import { FlowEditorForm, StepEditorForm } from "./components/flowForms";
-import type { AuditResult, Flow, FlowStep, FlowWithSteps, FullSnapshot, Project } from "./types";
+import { FlowEditorForm, PrereqStepEditorForm, StepEditorForm } from "./components/flowForms";
+import type {
+  AuditResult,
+  Flow,
+  FlowStep,
+  FlowWithSteps,
+  FullSnapshot,
+  PrereqStep,
+  Project,
+  ProjectVariable,
+} from "./types";
 
 const POLL_MS = 3000;
+const ACTIVE_PROJECT_KEY = "fm:active-project-id";
+
+function readSavedProjectId(): string | null {
+  try {
+    return window.localStorage.getItem(ACTIVE_PROJECT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveProjectId(id: string | null): void {
+  try {
+    if (id) window.localStorage.setItem(ACTIVE_PROJECT_KEY, id);
+    else window.localStorage.removeItem(ACTIVE_PROJECT_KEY);
+  } catch {
+    /* ignore (e.g. private mode quota) */
+  }
+}
 
 type ModalState =
   | { kind: "none" }
@@ -28,18 +64,28 @@ type ModalState =
   | { kind: "audit-result"; result: AuditResult; projectName: string }
   | { kind: "create-flow"; project: Project }
   | { kind: "edit-flow"; project: Project; flow: Flow }
-  | { kind: "add-step"; project: Project; flowDetail: FlowWithSteps }
-  | { kind: "edit-step"; project: Project; flowDetail: FlowWithSteps; step: FlowStep }
-  | { kind: "confirm-delete-flow"; flow: Flow };
+  | { kind: "add-step"; project: Project; flowDetail: FlowWithSteps; projectVars: ProjectVariable[] }
+  | { kind: "edit-step"; project: Project; flowDetail: FlowWithSteps; step: FlowStep; projectVars: ProjectVariable[] }
+  | { kind: "confirm-delete-flow"; flow: Flow }
+  | { kind: "add-prereq-step"; project: Project; siblings: PrereqStep[] }
+  | { kind: "edit-prereq-step"; project: Project; siblings: PrereqStep[]; step: PrereqStep };
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<FullSnapshot | null>(null);
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => readSavedProjectId());
   const [modal, setModal] = useState<ModalState>({ kind: "none" });
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [refreshTick, setRefreshTick] = useState(0);
   const toastSeq = useRef(0);
   const timer = useRef<number | null>(null);
+  /**
+   * In-memory per-project scroll position cache.
+   * Switching projects: save outgoing scrollY → restore incoming (or 0 on first visit).
+   * Lives only in this session — page reload resets all positions to 0, which is fine.
+   */
+  const scrollPositions = useRef<Map<string, number>>(new Map());
+  /** Whether we've already done the first project-mount (skip scroll restore on it). */
+  const skipNextScrollRestore = useRef(true);
 
   /**
    * Switch to a project AND reset the section tab to "urls" (the default).
@@ -50,6 +96,10 @@ export default function App() {
    */
   function selectProject(id: string) {
     if (id === activeProjectId) return;
+    // Save the outgoing project's scroll so we can restore it if the user comes back
+    if (activeProjectId) {
+      scrollPositions.current.set(activeProjectId, window.scrollY);
+    }
     if (window.location.hash !== "#urls") {
       window.history.replaceState(null, "", "#urls");
       // Dispatch hashchange so ProjectView's listener picks it up if it doesn't remount in time.
@@ -57,6 +107,20 @@ export default function App() {
     }
     setActiveProjectId(id);
   }
+
+  // After a project switch, restore the saved scroll position (or scroll to top on first visit).
+  // Uses useLayoutEffect + rAF so it runs after the new ProjectView has committed.
+  useLayoutEffect(() => {
+    if (!activeProjectId) return;
+    if (skipNextScrollRestore.current) {
+      skipNextScrollRestore.current = false;
+      return;
+    }
+    const saved = scrollPositions.current.get(activeProjectId) ?? 0;
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: saved, behavior: "auto" });
+    });
+  }, [activeProjectId]);
 
   function pushToast(message: string, kind: ToastItem["kind"] = "success") {
     const id = ++toastSeq.current;
@@ -75,13 +139,40 @@ export default function App() {
       const data = await fetchStatus();
       setSnapshot(data);
       setActiveProjectId((current) => {
+        // Prefer current state, then the saved id (in case state hasn't hydrated yet),
+        // then fall back to the first available project.
         if (current && data.projects.some((p) => p.id === current)) return current;
+        const saved = readSavedProjectId();
+        if (saved && data.projects.some((p) => p.id === saved)) return saved;
         return data.projects[0]?.id ?? null;
       });
     } catch (e) {
       console.error(e);
     }
   }
+
+  // Persist the active project so a page refresh lands on the same one
+  useEffect(() => {
+    saveProjectId(activeProjectId);
+  }, [activeProjectId]);
+
+  // Reflect the active project (and any failing count) in the document title.
+  // Helps when the dashboard is one tab among many — failures jump out.
+  useEffect(() => {
+    const project = snapshot?.projects.find((p) => p.id === activeProjectId);
+    const projectUrls = snapshot?.urls.filter((u) => u.projectId === activeProjectId) ?? [];
+    const failing = projectUrls.filter(
+      (u) => u.statusGroup === "4xx" || u.statusGroup === "5xx" || u.statusGroup === "error"
+    ).length;
+    const base = "Functional Monitor";
+    if (!project) {
+      document.title = base;
+      return;
+    }
+    document.title = failing > 0
+      ? `(${failing} failing) ${project.name} · ${base}`
+      : `${project.name} · ${base}`;
+  }, [snapshot, activeProjectId]);
 
   useEffect(() => {
     refresh();
@@ -144,16 +235,22 @@ export default function App() {
 
   async function openAddStep(flow: Flow) {
     if (!activeProject) return;
-    const detail = await fetchFlow(flow.id);
-    setModal({ kind: "add-step", project: activeProject, flowDetail: detail });
+    const [detail, projectVars] = await Promise.all([
+      fetchFlow(flow.id),
+      fetchProjectVariables(activeProject.id).catch(() => []),
+    ]);
+    setModal({ kind: "add-step", project: activeProject, flowDetail: detail, projectVars });
   }
 
   async function openEditStep(flow: Flow, stepId: string) {
     if (!activeProject) return;
-    const detail = await fetchFlow(flow.id);
+    const [detail, projectVars] = await Promise.all([
+      fetchFlow(flow.id),
+      fetchProjectVariables(activeProject.id).catch(() => []),
+    ]);
     const step = detail.steps.find((s) => s.id === stepId);
     if (!step) return;
-    setModal({ kind: "edit-step", project: activeProject, flowDetail: detail, step });
+    setModal({ kind: "edit-step", project: activeProject, flowDetail: detail, step, projectVars });
   }
 
   async function confirmDeleteFlow() {
@@ -232,6 +329,12 @@ export default function App() {
           onAddStep={openAddStep}
           onEditStep={openEditStep}
           onDeleteFlow={(flow) => setModal({ kind: "confirm-delete-flow", flow })}
+          onAddPrereqStep={(siblings) =>
+            setModal({ kind: "add-prereq-step", project: activeProject, siblings })
+          }
+          onEditPrereqStep={(step, siblings) =>
+            setModal({ kind: "edit-prereq-step", project: activeProject, siblings, step })
+          }
         />
       ) : (
         <main className="main">
@@ -363,6 +466,7 @@ export default function App() {
           <StepEditorForm
             flow={modal.flowDetail}
             project={modal.project}
+            projectVars={modal.projectVars}
             onDone={handleFormDone}
             onError={(m) => pushToast(m, "error")}
           />
@@ -371,6 +475,41 @@ export default function App() {
           <StepEditorForm
             flow={modal.flowDetail}
             project={modal.project}
+            step={modal.step}
+            projectVars={modal.projectVars}
+            onDone={handleFormDone}
+            onError={(m) => pushToast(m, "error")}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        open={modal.kind === "add-prereq-step" || modal.kind === "edit-prereq-step"}
+        title={
+          modal.kind === "edit-prereq-step"
+            ? `Edit prereq step ${modal.step.position}`
+            : "Add prerequisite step"
+        }
+        subtitle={
+          modal.kind === "add-prereq-step" || modal.kind === "edit-prereq-step"
+            ? `Project: ${modal.project.name} — captured vars become available everywhere in this project.`
+            : undefined
+        }
+        onClose={() => setModal({ kind: "none" })}
+        size="lg"
+      >
+        {modal.kind === "add-prereq-step" && (
+          <PrereqStepEditorForm
+            project={modal.project}
+            siblingSteps={modal.siblings}
+            onDone={handleFormDone}
+            onError={(m) => pushToast(m, "error")}
+          />
+        )}
+        {modal.kind === "edit-prereq-step" && (
+          <PrereqStepEditorForm
+            project={modal.project}
+            siblingSteps={modal.siblings}
             step={modal.step}
             onDone={handleFormDone}
             onError={(m) => pushToast(m, "error")}

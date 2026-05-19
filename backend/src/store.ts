@@ -16,7 +16,10 @@ import type {
   HttpMethod,
   KeyValue,
   MonitoredUrl,
+  PrereqRun,
+  PrereqStep,
   Project,
+  ProjectVariable,
   SparklinePoint,
   StatusGroup,
   StepResult,
@@ -33,6 +36,9 @@ interface ProjectRow {
   slack_webhook_url: string;
   slack_bot_token: string;
   slack_channel: string;
+  prereq_interval_minutes: number;
+  prereq_enabled: number;
+  prereq_last_run_at: number | null;
   created_at: string;
 }
 
@@ -97,6 +103,12 @@ function rowToProject(r: ProjectRow): Project {
   const keys = db()
     .prepare("SELECT * FROM api_keys WHERE project_id = ? ORDER BY rowid")
     .all(r.id) as unknown as ApiKeyRow[];
+  // Latest prereq run for at-a-glance status
+  const lastRun = db()
+    .prepare(
+      "SELECT ok, total_ms FROM prereq_runs WHERE project_id = ? ORDER BY started_at DESC LIMIT 1"
+    )
+    .get(r.id) as { ok: number; total_ms: number | null } | undefined;
   return {
     id: r.id,
     name: r.name,
@@ -105,6 +117,11 @@ function rowToProject(r: ProjectRow): Project {
     slackBotToken: r.slack_bot_token,
     slackChannel: r.slack_channel,
     apiKeys: keys.map(rowToApiKey),
+    prereqIntervalMinutes: r.prereq_interval_minutes ?? 30,
+    prereqEnabled: (r.prereq_enabled ?? 1) === 1,
+    prereqLastRunAt: r.prereq_last_run_at,
+    prereqLastRunOk: lastRun ? lastRun.ok === 1 : null,
+    prereqLastRunTotalMs: lastRun?.total_ms ?? null,
     createdAt: r.created_at,
   };
 }
@@ -205,14 +222,26 @@ export function createProject(input: {
 
 export function updateProject(
   id: string,
-  patch: Partial<Pick<Project, "name" | "description" | "slackWebhookUrl" | "slackBotToken" | "slackChannel">>
+  patch: Partial<
+    Pick<
+      Project,
+      | "name"
+      | "description"
+      | "slackWebhookUrl"
+      | "slackBotToken"
+      | "slackChannel"
+      | "prereqIntervalMinutes"
+      | "prereqEnabled"
+    >
+  >
 ): Project | undefined {
   const existing = getProject(id);
   if (!existing) return undefined;
   db()
     .prepare(
       `UPDATE projects
-       SET name = ?, description = ?, slack_webhook_url = ?, slack_bot_token = ?, slack_channel = ?
+       SET name = ?, description = ?, slack_webhook_url = ?, slack_bot_token = ?, slack_channel = ?,
+           prereq_interval_minutes = ?, prereq_enabled = ?
        WHERE id = ?`
     )
     .run(
@@ -221,9 +250,15 @@ export function updateProject(
       patch.slackWebhookUrl ?? existing.slackWebhookUrl,
       patch.slackBotToken ?? existing.slackBotToken,
       patch.slackChannel ?? existing.slackChannel,
+      Math.max(1, Math.min(60 * 24, Number(patch.prereqIntervalMinutes ?? existing.prereqIntervalMinutes))),
+      (patch.prereqEnabled ?? existing.prereqEnabled) ? 1 : 0,
       id
     );
   return getProject(id);
+}
+
+export function markPrereqRunCompletedAt(projectId: string, when: number): void {
+  db().prepare("UPDATE projects SET prereq_last_run_at = ? WHERE id = ?").run(when, projectId);
 }
 
 export function deleteProject(id: string): boolean {
@@ -698,21 +733,21 @@ const FLOW_SELECT_WITH_RUN = `
 export function listFlows(): Flow[] {
   const rows = db()
     .prepare(`${FLOW_SELECT_WITH_RUN} ORDER BY f.created_at`)
-    .all() as FlowRow[];
+    .all() as unknown as FlowRow[];
   return rows.map(rowToFlow);
 }
 
 export function listFlowsByProject(projectId: string): Flow[] {
   const rows = db()
     .prepare(`${FLOW_SELECT_WITH_RUN} WHERE f.project_id = ? ORDER BY f.created_at`)
-    .all(projectId) as FlowRow[];
+    .all(projectId) as unknown as FlowRow[];
   return rows.map(rowToFlow);
 }
 
 export function getFlow(id: string): Flow | undefined {
   const row = db()
     .prepare(`${FLOW_SELECT_WITH_RUN} WHERE f.id = ?`)
-    .get(id) as FlowRow | undefined;
+    .get(id) as unknown as FlowRow | undefined;
   return row ? rowToFlow(row) : undefined;
 }
 
@@ -787,12 +822,12 @@ export function markFlowRunCompletedAt(id: string, when: number): void {
 export function listFlowSteps(flowId: string): FlowStep[] {
   const rows = db()
     .prepare("SELECT * FROM flow_steps WHERE flow_id = ? ORDER BY position")
-    .all(flowId) as FlowStepRow[];
+    .all(flowId) as unknown as FlowStepRow[];
   return rows.map(rowToFlowStep);
 }
 
 export function getFlowStep(id: string): FlowStep | undefined {
-  const row = db().prepare("SELECT * FROM flow_steps WHERE id = ?").get(id) as
+  const row = db().prepare("SELECT * FROM flow_steps WHERE id = ?").get(id) as unknown as
     | FlowStepRow
     | undefined;
   return row ? rowToFlowStep(row) : undefined;
@@ -1019,24 +1054,24 @@ export function recordStepResult(args: {
 }
 
 export function getFlowRun(id: string): FlowRun | undefined {
-  const row = db().prepare("SELECT * FROM flow_runs WHERE id = ?").get(id) as
+  const row = db().prepare("SELECT * FROM flow_runs WHERE id = ?").get(id) as unknown as
     | FlowRunRow
     | undefined;
   if (!row) return undefined;
   const stepRows = db()
     .prepare("SELECT * FROM step_results WHERE flow_run_id = ? ORDER BY position")
-    .all(id) as StepResultRow[];
+    .all(id) as unknown as StepResultRow[];
   return rowToFlowRun(row, stepRows.map(rowToStepResult));
 }
 
 export function listFlowRuns(flowId: string, limit = 30): FlowRun[] {
   const rows = db()
     .prepare("SELECT * FROM flow_runs WHERE flow_id = ? ORDER BY started_at DESC LIMIT ?")
-    .all(flowId, limit) as FlowRunRow[];
+    .all(flowId, limit) as unknown as FlowRunRow[];
   return rows.map((r) => {
     const stepRows = db()
       .prepare("SELECT * FROM step_results WHERE flow_run_id = ? ORDER BY position")
-      .all(r.id) as StepResultRow[];
+      .all(r.id) as unknown as StepResultRow[];
     return rowToFlowRun(r, stepRows.map(rowToStepResult));
   });
 }
@@ -1094,6 +1129,438 @@ export function cacheVariable(flowId: string, name: string, value: string, ttlSe
 
 export function clearVariableCache(flowId: string): void {
   db().prepare("DELETE FROM variable_cache WHERE flow_id = ?").run(flowId);
+}
+
+// =============================================================
+// PREREQUISITES (project-level setup chain)
+// =============================================================
+
+interface PrereqStepRow {
+  id: string;
+  project_id: string;
+  position: number;
+  description: string;
+  url: string;
+  method: string;
+  body_type: string;
+  body: string;
+  body_content_type: string;
+  api_key_id: string | null;
+  assertions_json: string;
+  custom_headers_json: string;
+  query_params_json: string;
+  extractions_json: string;
+  wait_before_ms: number;
+  max_retries: number;
+  retry_backoff_ms: number;
+}
+
+interface PrereqRunRow {
+  id: string;
+  project_id: string;
+  started_at: number;
+  ended_at: number | null;
+  ok: number;
+  failed_at_step_id: string | null;
+  variables_json: string;
+  total_ms: number | null;
+}
+
+interface PrereqStepResultRow {
+  id: string;
+  prereq_run_id: string;
+  step_id: string;
+  position: number;
+  status_code: number | null;
+  status_group: string | null;
+  error_reason: string | null;
+  dns_ms: number | null;
+  tcp_ms: number | null;
+  tls_ms: number | null;
+  ttfb_ms: number | null;
+  download_ms: number | null;
+  total_ms: number | null;
+  assertion_results_json: string;
+  extracted_values_json: string;
+  attempts: number;
+  skipped: number;
+  skip_reason: string | null;
+  ok: number;
+  checked_at: number;
+}
+
+function rowToPrereqStep(r: PrereqStepRow): PrereqStep {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    position: r.position,
+    description: r.description,
+    url: r.url,
+    method: (r.method as HttpMethod) ?? "GET",
+    bodyType: (r.body_type as BodyType) ?? "none",
+    body: r.body ?? "",
+    bodyContentType: r.body_content_type ?? "",
+    apiKeyId: r.api_key_id,
+    assertions: safeParse<Assertion[]>(r.assertions_json, []),
+    customHeaders: safeParse<KeyValue[]>(r.custom_headers_json, []),
+    queryParams: safeParse<KeyValue[]>(r.query_params_json, []),
+    extractions: safeParse<Extraction[]>(r.extractions_json, []),
+    waitBeforeMs: r.wait_before_ms,
+    maxRetries: r.max_retries,
+    retryBackoffMs: r.retry_backoff_ms,
+  };
+}
+
+function rowToPrereqStepResult(r: PrereqStepResultRow): StepResult {
+  return {
+    id: r.id,
+    flowRunId: r.prereq_run_id,
+    stepId: r.step_id,
+    position: r.position,
+    statusCode: r.status_code,
+    statusGroup: (r.status_group as StatusGroup | null) ?? null,
+    errorReason: r.error_reason,
+    timings: {
+      dnsMs: r.dns_ms,
+      tcpMs: r.tcp_ms,
+      tlsMs: r.tls_ms,
+      ttfbMs: r.ttfb_ms,
+      downloadMs: r.download_ms,
+      totalMs: r.total_ms,
+    },
+    assertionResults: safeParse<AssertionResult[]>(r.assertion_results_json, []),
+    extractedValues: safeParse<ExtractedValue[]>(r.extracted_values_json, []),
+    attempts: r.attempts,
+    skipped: r.skipped === 1,
+    skipReason: r.skip_reason,
+    ok: r.ok === 1,
+    checkedAt: r.checked_at,
+  };
+}
+
+function rowToPrereqRun(r: PrereqRunRow, stepResults: StepResult[]): PrereqRun {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    startedAt: r.started_at,
+    endedAt: r.ended_at,
+    ok: r.ok === 1,
+    failedAtStepId: r.failed_at_step_id,
+    totalMs: r.total_ms,
+    variables: safeParse<Record<string, string>>(r.variables_json, {}),
+    stepResults,
+  };
+}
+
+// ---- Prereq step CRUD ----
+
+export function listPrereqSteps(projectId: string): PrereqStep[] {
+  const rows = db()
+    .prepare("SELECT * FROM prereq_steps WHERE project_id = ? ORDER BY position")
+    .all(projectId) as unknown as PrereqStepRow[];
+  return rows.map(rowToPrereqStep);
+}
+
+export function getPrereqStep(id: string): PrereqStep | undefined {
+  const row = db().prepare("SELECT * FROM prereq_steps WHERE id = ?").get(id) as unknown as
+    | PrereqStepRow
+    | undefined;
+  return row ? rowToPrereqStep(row) : undefined;
+}
+
+export function addPrereqStep(input: {
+  projectId: string;
+  url: string;
+  description?: string;
+  method?: HttpMethod;
+  bodyType?: BodyType;
+  body?: string;
+  bodyContentType?: string;
+  apiKeyId?: string | null;
+  assertions?: Assertion[];
+  customHeaders?: KeyValue[];
+  queryParams?: KeyValue[];
+  extractions?: Extraction[];
+  waitBeforeMs?: number;
+  maxRetries?: number;
+  retryBackoffMs?: number;
+}): PrereqStep {
+  const project = getProject(input.projectId);
+  if (!project) throw new Error("Project not found");
+
+  const url = input.url.trim();
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("Only http(s) URLs are supported");
+    }
+  } catch {
+    throw new Error("Invalid URL");
+  }
+  if ((input.method as string) === "DELETE") {
+    throw new Error("DELETE method is not allowed for safety");
+  }
+
+  const maxRow = db()
+    .prepare("SELECT MAX(position) AS m FROM prereq_steps WHERE project_id = ?")
+    .get(input.projectId) as { m: number | null };
+  const nextPos = (maxRow.m ?? 0) + 1;
+
+  const id = randomUUID();
+  db()
+    .prepare(
+      `INSERT INTO prereq_steps (id, project_id, position, description, url, method, body_type, body,
+                                 body_content_type, api_key_id, assertions_json, custom_headers_json,
+                                 query_params_json, extractions_json, wait_before_ms, max_retries, retry_backoff_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      input.projectId,
+      nextPos,
+      input.description?.trim() ?? "",
+      url,
+      input.method ?? "GET",
+      input.bodyType ?? "none",
+      input.body ?? "",
+      input.bodyContentType?.trim() ?? "",
+      input.apiKeyId ?? null,
+      JSON.stringify(input.assertions ?? []),
+      JSON.stringify(cleanKv(input.customHeaders ?? [])),
+      JSON.stringify(cleanKv(input.queryParams ?? [])),
+      JSON.stringify(input.extractions ?? []),
+      Math.max(0, Math.min(60_000, Number(input.waitBeforeMs ?? 0))),
+      Math.max(0, Math.min(5, Number(input.maxRetries ?? 0))),
+      Math.max(100, Math.min(30_000, Number(input.retryBackoffMs ?? 1000)))
+    );
+  return getPrereqStep(id)!;
+}
+
+export function updatePrereqStep(
+  id: string,
+  patch: Partial<{
+    description: string;
+    url: string;
+    method: HttpMethod;
+    bodyType: BodyType;
+    body: string;
+    bodyContentType: string;
+    apiKeyId: string | null;
+    assertions: Assertion[];
+    customHeaders: KeyValue[];
+    queryParams: KeyValue[];
+    extractions: Extraction[];
+    waitBeforeMs: number;
+    maxRetries: number;
+    retryBackoffMs: number;
+  }>
+): PrereqStep | undefined {
+  const existing = getPrereqStep(id);
+  if (!existing) return undefined;
+  if ((patch.method as string) === "DELETE") {
+    throw new Error("DELETE method is not allowed for safety");
+  }
+  db()
+    .prepare(
+      `UPDATE prereq_steps
+       SET description = ?, url = ?, method = ?, body_type = ?, body = ?, body_content_type = ?,
+           api_key_id = ?, assertions_json = ?, custom_headers_json = ?, query_params_json = ?,
+           extractions_json = ?, wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?
+       WHERE id = ?`
+    )
+    .run(
+      patch.description ?? existing.description,
+      patch.url ?? existing.url,
+      patch.method ?? existing.method,
+      patch.bodyType ?? existing.bodyType,
+      patch.body ?? existing.body,
+      patch.bodyContentType ?? existing.bodyContentType,
+      patch.apiKeyId !== undefined ? patch.apiKeyId : existing.apiKeyId,
+      JSON.stringify(patch.assertions ?? existing.assertions),
+      JSON.stringify(cleanKv(patch.customHeaders ?? existing.customHeaders)),
+      JSON.stringify(cleanKv(patch.queryParams ?? existing.queryParams)),
+      JSON.stringify(patch.extractions ?? existing.extractions),
+      Math.max(0, Math.min(60_000, Number(patch.waitBeforeMs ?? existing.waitBeforeMs))),
+      Math.max(0, Math.min(5, Number(patch.maxRetries ?? existing.maxRetries))),
+      Math.max(100, Math.min(30_000, Number(patch.retryBackoffMs ?? existing.retryBackoffMs))),
+      id
+    );
+  return getPrereqStep(id);
+}
+
+export function deletePrereqStep(id: string): boolean {
+  return db().prepare("DELETE FROM prereq_steps WHERE id = ?").run(id).changes > 0;
+}
+
+export function reorderPrereqSteps(projectId: string, orderedIds: string[]): void {
+  tx(() => {
+    orderedIds.forEach((stepId, idx) => {
+      db()
+        .prepare("UPDATE prereq_steps SET position = ? WHERE id = ? AND project_id = ?")
+        .run(idx + 1, stepId, projectId);
+    });
+  });
+}
+
+// ---- Prereq runs ----
+
+export function startPrereqRun(projectId: string): string {
+  const id = randomUUID();
+  db()
+    .prepare(
+      `INSERT INTO prereq_runs (id, project_id, started_at, ended_at, ok, failed_at_step_id, variables_json, total_ms)
+       VALUES (?, ?, ?, NULL, 0, NULL, '{}', NULL)`
+    )
+    .run(id, projectId, Date.now());
+  return id;
+}
+
+export function finishPrereqRun(args: {
+  id: string;
+  ok: boolean;
+  failedAtStepId: string | null;
+  variables: Record<string, string>;
+  totalMs: number;
+}): void {
+  db()
+    .prepare(
+      `UPDATE prereq_runs SET ended_at = ?, ok = ?, failed_at_step_id = ?, variables_json = ?, total_ms = ?
+       WHERE id = ?`
+    )
+    .run(
+      Date.now(),
+      args.ok ? 1 : 0,
+      args.failedAtStepId,
+      JSON.stringify(args.variables),
+      args.totalMs,
+      args.id
+    );
+}
+
+export function recordPrereqStepResult(args: {
+  prereqRunId: string;
+  stepId: string;
+  position: number;
+  statusCode: number | null;
+  statusGroup: StatusGroup | null;
+  errorReason: string | null;
+  timings: Timings;
+  assertionResults: AssertionResult[];
+  extractedValues: ExtractedValue[];
+  attempts: number;
+  skipped: boolean;
+  skipReason: string | null;
+  ok: boolean;
+}): void {
+  db()
+    .prepare(
+      `INSERT INTO prereq_step_results (id, prereq_run_id, step_id, position, status_code, status_group, error_reason,
+                                         dns_ms, tcp_ms, tls_ms, ttfb_ms, download_ms, total_ms,
+                                         assertion_results_json, extracted_values_json, attempts, skipped, skip_reason,
+                                         ok, checked_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      randomUUID(),
+      args.prereqRunId,
+      args.stepId,
+      args.position,
+      args.statusCode,
+      args.statusGroup,
+      args.errorReason,
+      args.timings.dnsMs,
+      args.timings.tcpMs,
+      args.timings.tlsMs,
+      args.timings.ttfbMs,
+      args.timings.downloadMs,
+      args.timings.totalMs,
+      JSON.stringify(args.assertionResults),
+      JSON.stringify(args.extractedValues),
+      args.attempts,
+      args.skipped ? 1 : 0,
+      args.skipReason,
+      args.ok ? 1 : 0,
+      Date.now()
+    );
+}
+
+export function getPrereqRun(id: string): PrereqRun | undefined {
+  const row = db().prepare("SELECT * FROM prereq_runs WHERE id = ?").get(id) as unknown as
+    | PrereqRunRow
+    | undefined;
+  if (!row) return undefined;
+  const stepRows = db()
+    .prepare("SELECT * FROM prereq_step_results WHERE prereq_run_id = ? ORDER BY position")
+    .all(id) as unknown as PrereqStepResultRow[];
+  return rowToPrereqRun(row, stepRows.map(rowToPrereqStepResult));
+}
+
+export function listPrereqRuns(projectId: string, limit = 30): PrereqRun[] {
+  const rows = db()
+    .prepare("SELECT * FROM prereq_runs WHERE project_id = ? ORDER BY started_at DESC LIMIT ?")
+    .all(projectId, limit) as unknown as PrereqRunRow[];
+  return rows.map((r) => {
+    const stepRows = db()
+      .prepare("SELECT * FROM prereq_step_results WHERE prereq_run_id = ? ORDER BY position")
+      .all(r.id) as unknown as PrereqStepResultRow[];
+    return rowToPrereqRun(r, stepRows.map(rowToPrereqStepResult));
+  });
+}
+
+// ---- Project variable cache (consumed by URLs + flows) ----
+
+export function getProjectVariables(projectId: string): Record<string, string> {
+  const now = Date.now();
+  const rows = db()
+    .prepare(
+      "SELECT variable_name, value FROM project_variable_cache WHERE project_id = ? AND expires_at > ?"
+    )
+    .all(projectId, now) as { variable_name: string; value: string }[];
+  const out: Record<string, string> = {};
+  for (const r of rows) out[r.variable_name] = r.value;
+  return out;
+}
+
+export function listProjectVariables(projectId: string): ProjectVariable[] {
+  const rows = db()
+    .prepare(
+      "SELECT variable_name, value, captured_at, expires_at FROM project_variable_cache WHERE project_id = ? ORDER BY variable_name"
+    )
+    .all(projectId) as {
+    variable_name: string;
+    value: string;
+    captured_at: number;
+    expires_at: number;
+  }[];
+  return rows.map((r) => ({
+    name: r.variable_name,
+    value: r.value,
+    capturedAt: r.captured_at,
+    expiresAt: r.expires_at,
+  }));
+}
+
+export function cacheProjectVariable(
+  projectId: string,
+  name: string,
+  value: string,
+  ttlSeconds: number
+): void {
+  const now = Date.now();
+  db()
+    .prepare(
+      `INSERT INTO project_variable_cache (project_id, variable_name, value, captured_at, expires_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(project_id, variable_name) DO UPDATE SET
+         value = excluded.value,
+         captured_at = excluded.captured_at,
+         expires_at = excluded.expires_at`
+    )
+    .run(projectId, name, value, now, now + ttlSeconds * 1000);
+}
+
+export function clearProjectVariableCache(projectId: string): void {
+  db().prepare("DELETE FROM project_variable_cache WHERE project_id = ?").run(projectId);
 }
 
 export function getUrlSparkline(

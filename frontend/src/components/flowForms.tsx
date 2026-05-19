@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import {
   addFlowStep,
+  addPrereqStep,
   createFlow,
   deleteFlowStep,
+  deletePrereqStep,
   updateFlow,
   updateFlowStep,
+  updatePrereqStep,
 } from "../api";
 import type {
   Assertion,
@@ -17,7 +20,9 @@ import type {
   FlowWithSteps,
   HttpMethod,
   KeyValue,
+  PrereqStep,
   Project,
+  ProjectVariable,
 } from "../types";
 
 interface BaseProps {
@@ -144,9 +149,14 @@ export function FlowEditorForm(props: BaseProps & { project: Project; flow?: Flo
 type StepTab = "basics" | "params" | "headers" | "body" | "assertions" | "extract" | "retry";
 
 export function StepEditorForm(
-  props: BaseProps & { flow: FlowWithSteps; project: Project; step?: FlowStep }
+  props: BaseProps & {
+    flow: FlowWithSteps;
+    project: Project;
+    step?: FlowStep;
+    projectVars?: ProjectVariable[];
+  }
 ) {
-  const { flow, project, step } = props;
+  const { flow, project, step, projectVars } = props;
   const editing = !!step;
   const [url, setUrl] = useState(step?.url ?? "");
   const [method, setMethod] = useState<HttpMethod>(step?.method ?? "GET");
@@ -165,15 +175,21 @@ export function StepEditorForm(
   const [tab, setTab] = useState<StepTab>("basics");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const bodyAllowed = method !== "GET";
   const headerCount = customHeaders.filter((h) => h.key.trim()).length;
   const paramCount = queryParams.filter((p) => p.key.trim()).length;
   const extractCount = extractions.filter((e) => e.saveAs.trim()).length;
 
-  // Build list of variables available in {{...}} from prior steps + cache hints
+  // Build list of variables available in {{...}}:
+  //   1) Project-pool vars captured by the prereq chain (visible everywhere)
+  //   2) Vars captured by earlier steps in THIS flow run
   const availableVars = (() => {
     const list: { name: string; from: string }[] = [];
+    for (const v of projectVars ?? []) {
+      list.push({ name: v.name, from: "prereq chain" });
+    }
     for (const s of flow.steps) {
       if (step && s.id === step.id) break;
       for (const ex of s.extractions) {
@@ -224,7 +240,11 @@ export function StepEditorForm(
 
   async function handleDelete() {
     if (!step) return;
-    if (!window.confirm("Delete this step?")) return;
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      window.setTimeout(() => setConfirmingDelete(false), 4000);
+      return;
+    }
     await deleteFlowStep(step.id);
     await props.onDone(`Step deleted`);
   }
@@ -352,8 +372,12 @@ export function StepEditorForm(
 
       <div className="modal-actions">
         {editing && (
-          <button type="button" className="ghost destructive" onClick={handleDelete}>
-            Delete step
+          <button
+            type="button"
+            className={`ghost destructive ${confirmingDelete ? "confirming" : ""}`}
+            onClick={handleDelete}
+          >
+            {confirmingDelete ? "Click again to confirm" : "Delete step"}
           </button>
         )}
         <div style={{ flex: 1 }} />
@@ -645,6 +669,254 @@ function BodyEditor(props: {
   );
 }
 
+// =============================================================
+// Prereq step editor — mirrors StepEditorForm but for project-level
+// prerequisite chains. Vars captured here flow into the project pool
+// (visible to every URL and Flow) when a TTL is set.
+// =============================================================
+export function PrereqStepEditorForm(
+  props: BaseProps & {
+    project: Project;
+    step?: PrereqStep;
+    /** Steps already in the chain — used to surface vars they capture. */
+    siblingSteps: PrereqStep[];
+  }
+) {
+  const { project, step, siblingSteps } = props;
+  const editing = !!step;
+  const [url, setUrl] = useState(step?.url ?? "");
+  const [method, setMethod] = useState<HttpMethod>(step?.method ?? "POST");
+  const [description, setDescription] = useState(step?.description ?? "");
+  const [apiKeyId, setApiKeyId] = useState(step?.apiKeyId ?? "");
+  const [bodyType, setBodyType] = useState<BodyType>(step?.bodyType ?? "json");
+  const [body, setBody] = useState(step?.body ?? "");
+  const [bodyContentType, setBodyContentType] = useState(step?.bodyContentType || "text/plain");
+  const [assertions, setAssertions] = useState<Assertion[]>(step?.assertions ?? []);
+  const [customHeaders, setCustomHeaders] = useState<KeyValue[]>(step?.customHeaders ?? []);
+  const [queryParams, setQueryParams] = useState<KeyValue[]>(step?.queryParams ?? []);
+  const [extractions, setExtractions] = useState<Extraction[]>(step?.extractions ?? []);
+  const [waitBeforeMs, setWaitBeforeMs] = useState(step?.waitBeforeMs ?? 0);
+  const [maxRetries, setMaxRetries] = useState(step?.maxRetries ?? 0);
+  const [retryBackoffMs, setRetryBackoffMs] = useState(step?.retryBackoffMs ?? 1000);
+  const [tab, setTab] = useState<StepTab>("basics");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const bodyAllowed = method !== "GET";
+  const headerCount = customHeaders.filter((h) => h.key.trim()).length;
+  const paramCount = queryParams.filter((p) => p.key.trim()).length;
+  const extractCount = extractions.filter((e) => e.saveAs.trim()).length;
+
+  // Vars captured by previous prereq steps in this chain
+  const availableVars = (() => {
+    const list: { name: string; from: string }[] = [];
+    for (const s of siblingSteps) {
+      if (step && s.id === step.id) break;
+      for (const ex of s.extractions) {
+        if (ex.saveAs.trim()) list.push({ name: ex.saveAs, from: `prereq step ${s.position}` });
+      }
+    }
+    return list;
+  })();
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!url.trim()) {
+      setTab("basics");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const payload = {
+        url: url.trim(),
+        description: description.trim(),
+        method,
+        apiKeyId: apiKeyId || null,
+        bodyType: method === "GET" ? "none" as BodyType : bodyType,
+        body: method === "GET" ? "" : body,
+        bodyContentType: method === "GET" || bodyType !== "raw" ? "" : bodyContentType.trim(),
+        assertions,
+        customHeaders: customHeaders.filter((h) => h.key.trim()),
+        queryParams: queryParams.filter((p) => p.key.trim()),
+        extractions: extractions.filter((e) => e.saveAs.trim()),
+        waitBeforeMs,
+        maxRetries,
+        retryBackoffMs,
+      };
+      if (editing) {
+        await updatePrereqStep(step!.id, payload);
+        await props.onDone(`Prereq step updated`);
+      } else {
+        await addPrereqStep(project.id, payload);
+        await props.onDone(`Prereq step added`);
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to save step");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete() {
+    if (!step) return;
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      window.setTimeout(() => setConfirmingDelete(false), 4000);
+      return;
+    }
+    await deletePrereqStep(step.id);
+    await props.onDone(`Prereq step deleted`);
+  }
+
+  return (
+    <form className="form" onSubmit={submit}>
+      <div className="builder-tabs">
+        <Tab name="basics" current={tab} setTab={setTab}>Basics</Tab>
+        <Tab name="params" current={tab} setTab={setTab}>Params{paramCount > 0 ? ` (${paramCount})` : ""}</Tab>
+        <Tab name="headers" current={tab} setTab={setTab}>Headers{headerCount > 0 ? ` (${headerCount})` : ""}</Tab>
+        <Tab name="body" current={tab} setTab={setTab} disabled={!bodyAllowed}>
+          Body{bodyAllowed && bodyType !== "none" ? " ●" : ""}
+        </Tab>
+        <Tab name="assertions" current={tab} setTab={setTab}>
+          Assertions{assertions.length > 0 ? ` (${assertions.length})` : ""}
+        </Tab>
+        <Tab name="extract" current={tab} setTab={setTab}>
+          Extract{extractCount > 0 ? ` (${extractCount})` : ""}
+        </Tab>
+        <Tab name="retry" current={tab} setTab={setTab}>
+          Retry / Wait
+          {maxRetries > 0 || waitBeforeMs > 0 ? " ●" : ""}
+        </Tab>
+      </div>
+
+      {availableVars.length > 0 && (
+        <div className="vars-hint">
+          <strong>Available variables</strong> (from earlier prereq steps): {" "}
+          {availableVars.map((v, i) => (
+            <span key={i} className="var-chip">
+              <code>{`{{${v.name}}}`}</code> <span className="muted small">· {v.from}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {tab === "basics" && (
+        <>
+          <div className="url-input-row">
+            <select className="method-select" value={method} onChange={(e) => setMethod(e.target.value as HttpMethod)}>
+              {METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <input
+              autoFocus
+              type="url"
+              placeholder="https://api.example.com/auth/login"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              required
+            />
+          </div>
+          <Field label="Description" hint="What does this prereq step do?">
+            <input
+              type="text"
+              placeholder="e.g. Log in as service account and capture token"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </Field>
+          <Field label="API key" hint="Optional — usually not needed for the login step itself">
+            <select value={apiKeyId} onChange={(e) => setApiKeyId(e.target.value)}>
+              <option value="">No API key</option>
+              {project.apiKeys.map((k) => (
+                <option key={k.id} value={k.id}>{k.name}</option>
+              ))}
+            </select>
+          </Field>
+          <div className="vars-hint" style={{ marginTop: 12 }}>
+            <strong>Tip:</strong> add an extraction on the <em>Extract</em> tab with a TTL to publish
+            the captured value to the project pool. Every URL and Flow can then use it as <code>{`{{name}}`}</code>.
+          </div>
+        </>
+      )}
+
+      {tab === "params" && (
+        <KvTableEditor
+          rows={queryParams}
+          setRows={setQueryParams}
+          keyPlaceholder="Param name"
+          valuePlaceholder="Param value (use {{var}} to substitute)"
+          hint="Appended to URL as ?key=value."
+        />
+      )}
+
+      {tab === "headers" && (
+        <KvTableEditor
+          rows={customHeaders}
+          setRows={setCustomHeaders}
+          keyPlaceholder="Header name"
+          valuePlaceholder="Header value (use {{var}} to substitute)"
+          hint="Sent on every check."
+        />
+      )}
+
+      {tab === "body" && bodyAllowed && (
+        <BodyEditor
+          bodyType={bodyType}
+          setBodyType={setBodyType}
+          body={body}
+          setBody={setBody}
+          bodyContentType={bodyContentType}
+          setBodyContentType={setBodyContentType}
+        />
+      )}
+      {tab === "body" && !bodyAllowed && (
+        <div className="empty-inline">GET requests don't carry a body.</div>
+      )}
+
+      {tab === "assertions" && (
+        <AssertionsEditor assertions={assertions} setAssertions={setAssertions} />
+      )}
+
+      {tab === "extract" && (
+        <ExtractionsEditor extractions={extractions} setExtractions={setExtractions} />
+      )}
+
+      {tab === "retry" && (
+        <RetryWaitEditor
+          waitBeforeMs={waitBeforeMs}
+          setWaitBeforeMs={setWaitBeforeMs}
+          maxRetries={maxRetries}
+          setMaxRetries={setMaxRetries}
+          retryBackoffMs={retryBackoffMs}
+          setRetryBackoffMs={setRetryBackoffMs}
+        />
+      )}
+
+      {err && <div className="inline-error">{err}</div>}
+
+      <div className="modal-actions">
+        {editing && (
+          <button
+            type="button"
+            className={`ghost destructive ${confirmingDelete ? "confirming" : ""}`}
+            onClick={handleDelete}
+          >
+            {confirmingDelete ? "Click again to confirm" : "Delete step"}
+          </button>
+        )}
+        <div style={{ flex: 1 }} />
+        <button type="button" className="ghost" onClick={() => props.onDone()}>
+          Cancel
+        </button>
+        <button type="submit" className="primary" disabled={busy}>
+          {busy ? "Saving…" : editing ? "Save step" : "Add step"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function AssertionsEditor(props: { assertions: Assertion[]; setAssertions: (a: Assertion[]) => void }) {
   const { assertions, setAssertions } = props;
   function add(type: AssertionType) {
@@ -664,7 +936,13 @@ function AssertionsEditor(props: { assertions: Assertion[]; setAssertions: (a: A
   }
   return (
     <>
-      <p className="sub small">Pass = step OK. Fail any assertion = step failed.</p>
+      <p className="sub small">
+        Pass = step OK. Fail any assertion = step failed.{" "}
+        <span className="muted">
+          <strong>Tip:</strong> use <code>{`{{var}}`}</code> in "body has" to track a value
+          that changes each run (e.g. a session token from prereqs).
+        </span>
+      </p>
       {assertions.length === 0 && <div className="empty-inline">No assertions — only status code 2xx/3xx counts as OK.</div>}
       {assertions.map((a) => (
         <div key={a.id} className="assertion-row">
@@ -691,7 +969,13 @@ function AssertionsEditor(props: { assertions: Assertion[]; setAssertions: (a: A
             </>
           )}
           {a.type === "body-contains" && (
-            <input type="text" placeholder="text" value={a.config.text ?? ""} onChange={(e) => update(a.id, { text: e.target.value })} style={{ flex: 1 }} />
+            <input
+              type="text"
+              placeholder='text or {{var}}'
+              value={a.config.text ?? ""}
+              onChange={(e) => update(a.id, { text: e.target.value })}
+              style={{ flex: 1 }}
+            />
           )}
           <button type="button" className="ghost destructive small" onClick={() => remove(a.id)}>×</button>
         </div>

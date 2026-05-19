@@ -1,15 +1,18 @@
+import { substitute } from "./extraction.js";
 import type { Assertion, AssertionResult } from "./types.js";
 
 export function evaluateAssertions(
   assertions: Assertion[],
-  outcome: { statusCode: number | null; totalMs: number | null; responseBody: string }
+  outcome: { statusCode: number | null; totalMs: number | null; responseBody: string },
+  vars: Record<string, string> = {}
 ): AssertionResult[] {
-  return assertions.map((a) => evaluateOne(a, outcome));
+  return assertions.map((a) => evaluateOne(a, outcome, vars));
 }
 
 function evaluateOne(
   a: Assertion,
-  outcome: { statusCode: number | null; totalMs: number | null; responseBody: string }
+  outcome: { statusCode: number | null; totalMs: number | null; responseBody: string },
+  vars: Record<string, string>
 ): AssertionResult {
   switch (a.type) {
     case "status-equals": {
@@ -53,7 +56,9 @@ function evaluateOne(
       };
     }
     case "body-contains": {
-      const text = String(a.config?.text ?? "");
+      // Resolve {{vars}} so the assertion tracks the current pool value (auth tokens,
+      // session ids, etc.) instead of a stale hardcoded literal.
+      const text = substitute(String(a.config?.text ?? ""), vars);
       const passed = text.length > 0 && outcome.responseBody.includes(text);
       return {
         id: a.id,

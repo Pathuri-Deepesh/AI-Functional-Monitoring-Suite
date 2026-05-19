@@ -19,6 +19,12 @@ export interface Project {
   slackBotToken: string;
   slackChannel: string;
   apiKeys: ApiKey[];
+  /** Interval (minutes) at which the prereq chain auto-runs. 0 = disabled (manual only). */
+  prereqIntervalMinutes: number;
+  prereqEnabled: boolean;
+  prereqLastRunAt: number | null;
+  prereqLastRunOk: boolean | null;
+  prereqLastRunTotalMs: number | null;
   createdAt: string;
 }
 
@@ -228,4 +234,52 @@ export interface FlowStats {
   failedRuns: number;
   failureRatePct: number;
   avgTotalMs: number | null;
+}
+
+// =============================================================
+// PREREQUISITES — project-level setup chain (login + capture tokens)
+// Variables captured here are visible to every URL and Flow in the project.
+// =============================================================
+
+export interface PrereqStep {
+  id: string;
+  projectId: string;
+  position: number;
+  description: string;
+
+  // Request spec (mirrors FlowStep)
+  url: string;
+  method: HttpMethod;
+  bodyType: BodyType;
+  body: string;
+  bodyContentType: string;
+  apiKeyId: string | null;
+  customHeaders: KeyValue[];
+  queryParams: KeyValue[];
+  assertions: Assertion[];
+
+  // Extraction (the whole point of a prereq)
+  extractions: Extraction[];
+  waitBeforeMs: number;
+  maxRetries: number;
+  retryBackoffMs: number;
+}
+
+export interface PrereqRun {
+  id: string;
+  projectId: string;
+  startedAt: number;
+  endedAt: number | null;
+  ok: boolean;
+  failedAtStepId: string | null;
+  totalMs: number | null;
+  variables: Record<string, string>;
+  stepResults: StepResult[];
+}
+
+export interface ProjectVariable {
+  name: string;
+  value: string;
+  capturedAt: number;
+  expiresAt: number | null; // null = never expires (only invalidated by re-run)
 }

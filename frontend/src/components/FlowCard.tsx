@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { fetchFlow, listFlowRuns, runFlowNow } from "../api";
+import { useEffect, useRef, useState } from "react";
+import { fetchFlow, fetchFlowRun, listFlowRuns, runFlowAsync } from "../api";
 import { Spinner } from "./Spinner";
 import type { Flow, FlowRun, FlowWithSteps, StatusGroup, StepResult } from "../types";
 
@@ -17,6 +17,9 @@ const METHOD_COLOR: Record<string, string> = {
   PATCH: "method-patch",
 };
 
+const POLL_MS = 500;
+const POLL_TIMEOUT_MS = 5 * 60_000; // safety cap: stop polling after 5 minutes
+
 interface Props {
   flow: Flow;
   onEdit: () => void;
@@ -31,7 +34,10 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
   const [expanded, setExpanded] = useState(true);
   const [detail, setDetail] = useState<FlowWithSteps | null>(null);
   const [lastRun, setLastRun] = useState<FlowRun | null>(null);
+  /** While a run is in-flight: the live FlowRun being polled. null otherwise. */
+  const [activeRun, setActiveRun] = useState<FlowRun | null>(null);
   const [running, setRunning] = useState(false);
+  const pollAbort = useRef<{ cancelled: boolean } | null>(null);
 
   async function load() {
     try {
@@ -46,22 +52,83 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flow.id, refreshTick, flow.lastRunAt]);
 
+  // Cancel any in-flight poll loop when unmounting / flow id changes
+  useEffect(() => {
+    return () => {
+      if (pollAbort.current) pollAbort.current.cancelled = true;
+    };
+  }, [flow.id]);
+
   async function handleRun() {
     setRunning(true);
+    setActiveRun(null);
+    const abort = { cancelled: false };
+    pollAbort.current = abort;
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
     try {
-      await runFlowNow(flow.id);
-      await load();
-      // Notify parent so the Flows KPI strip + flow list re-fetch with fresh lastRunAt
-      onAfterRun?.();
+      // force=true → manual click should always do real work (bypasses smart TTL cache)
+      const { runId } = await runFlowAsync(flow.id, { force: true });
+      // Initial fetch so the UI shows the run row even before step 1 completes
+      try {
+        const initial = await fetchFlowRun(runId);
+        if (!abort.cancelled) setActiveRun(initial);
+      } catch {}
+      // Poll until the run ends or we hit the deadline
+      while (!abort.cancelled && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, POLL_MS));
+        if (abort.cancelled) return;
+        try {
+          const run = await fetchFlowRun(runId);
+          if (abort.cancelled) return;
+          setActiveRun(run);
+          if (run.endedAt != null) break;
+        } catch {
+          // Transient — keep polling
+        }
+      }
+      if (!abort.cancelled) {
+        await load();
+        onAfterRun?.();
+      }
     } finally {
-      setRunning(false);
+      if (!abort.cancelled) {
+        setRunning(false);
+        setActiveRun(null);
+      }
     }
   }
 
+  // Which run drives the per-step status? While running we use the live activeRun;
+  // otherwise we fall back to the most recent persisted run.
+  const displayRun = activeRun ?? lastRun;
   const hasSteps = (detail?.steps.length ?? 0) > 0;
-  const runOk = lastRun?.ok ?? null;
-  const statusClass = runOk === null ? "pending" : runOk ? "g-2xx" : "g-5xx";
-  const statusLabel = runOk === null ? "PENDING" : runOk ? "OK" : "FAILED";
+  const runOk = running ? null : lastRun?.ok ?? null;
+  const statusClass = running
+    ? "running"
+    : runOk === null
+    ? "pending"
+    : runOk
+    ? "g-2xx"
+    : "g-5xx";
+  const statusLabel = running
+    ? "RUNNING"
+    : runOk === null
+    ? "PENDING"
+    : runOk
+    ? "OK"
+    : "FAILED";
+
+  // Find the step currently executing — the lowest-position step the runner
+  // hasn't written a result for yet, while a run is active.
+  const runningStepPosition = (() => {
+    if (!running || !detail) return null;
+    const done = new Set((activeRun?.stepResults ?? []).map((r) => r.stepId));
+    const sorted = [...detail.steps].sort((a, b) => a.position - b.position);
+    for (const s of sorted) if (!done.has(s.id)) return s.position;
+    return null;
+  })();
+  const completedCount = activeRun?.stepResults.length ?? 0;
+  const totalSteps = detail?.steps.length ?? 0;
 
   return (
     <div className={`flow-card border-${statusClass}`}>
@@ -102,6 +169,29 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
         <p className="flow-desc">{flow.description}</p>
       )}
 
+      {running && totalSteps > 0 && (
+        <div
+          className="flow-progress"
+          aria-label={`Running step ${runningStepPosition ?? "—"} of ${totalSteps}`}
+        >
+          <div
+            className="flow-progress-bar"
+            style={{ width: `${Math.min(100, (completedCount / totalSteps) * 100)}%` }}
+          />
+          <div className="flow-progress-label">
+            <Spinner size={11} />
+            <span>
+              {runningStepPosition != null
+                ? `Step ${runningStepPosition} of ${totalSteps} running…`
+                : `Wrapping up step ${totalSteps} of ${totalSteps}…`}
+            </span>
+            <span className="muted small">
+              · {completedCount} done
+            </span>
+          </div>
+        </div>
+      )}
+
       {expanded && (
         <div className="flow-body">
           {!detail ? (
@@ -117,7 +207,9 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
             <>
               <div className="step-list">
                 {detail.steps.map((step) => {
-                  const result = lastRun?.stepResults.find((r) => r.stepId === step.id);
+                  const result = displayRun?.stepResults.find((r) => r.stepId === step.id);
+                  const isRunningStep = running && runningStepPosition === step.position;
+                  const isQueued = running && !result && !isRunningStep;
                   return (
                     <StepRow
                       key={step.id}
@@ -127,6 +219,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
                       description={step.description}
                       extractions={step.extractions.map((e) => e.saveAs).filter(Boolean)}
                       result={result ?? null}
+                      runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
                       onClick={() => onEditStep(step.id)}
                     />
                   );
@@ -134,7 +227,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
               </div>
               <div className="flow-add-step">
                 <button className="ghost small" onClick={onAddStep}>+ Add step</button>
-                {lastRun && (
+                {lastRun && !running && (
                   <span className="muted small">
                     Last run: {new Date(lastRun.startedAt).toLocaleString()}
                   </span>
@@ -155,26 +248,48 @@ function StepRow(props: {
   description: string;
   extractions: string[];
   result: StepResult | null;
+  runState?: "idle" | "running" | "queued";
   onClick: () => void;
 }) {
-  const { position, method, url, description, extractions, result, onClick } = props;
+  const { position, method, url, description, extractions, result, runState = "idle", onClick } = props;
   const ok = result?.ok ?? null;
   const skipped = result?.skipped ?? false;
-  const statusClass = skipped
-    ? "pending"
-    : ok === null
-    ? "pending"
-    : ok
-    ? "g-2xx"
-    : "g-5xx";
+  const statusClass =
+    runState === "running"
+      ? "running"
+      : runState === "queued"
+      ? "queued"
+      : skipped
+      ? "pending"
+      : ok === null
+      ? "pending"
+      : ok
+      ? "g-2xx"
+      : "g-5xx";
+  const pillText =
+    runState === "running"
+      ? "▶ RUNNING"
+      : runState === "queued"
+      ? "QUEUED"
+      : skipped
+      ? "SKIPPED"
+      : ok === null
+      ? "—"
+      : result?.statusCode ?? "OK";
+  const rowClass = [
+    "step-row",
+    ok === false && !skipped ? "step-failed" : "",
+    runState === "running" ? "step-running" : "",
+    runState === "queued" ? "step-queued" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
-    <div className={`step-row ${ok === false && !skipped ? "step-failed" : ""}`} onClick={onClick}>
+    <div className={rowClass} onClick={onClick}>
       <div className="step-num">{position}</div>
       <div className="step-main">
         <div className="step-line">
-          <span className={`pill ${statusClass}`}>
-            {skipped ? "SKIPPED" : ok === null ? "—" : result?.statusCode ?? "OK"}
-          </span>
+          <span className={`pill ${statusClass}`}>{pillText}</span>
           <span className={`method-tag ${METHOD_COLOR[method] ?? "method-get"}`}>{method}</span>
           <span className="url-link" style={{ borderBottom: "none", color: "var(--text)" }}>
             {url}

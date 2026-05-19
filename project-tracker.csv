@@ -99,3 +99,33 @@
 9.3,Demo & explanation,Demo: POST + JSON body to httpbin/post,Done,2026-05-11,Confirmed body sent correctly
 9.4,Demo & explanation,Explanation doc: how Phase 1 connects to Phase 2,Done,2026-05-05,Mapped each Phase 2 requirement to Phase 1 file
 9.5,Demo & explanation,Manager meeting: present plan and get approval,Pending,,User to schedule
+14.1,Phase 1.14 - Prerequisites,Backend: 4 new tables (prereq_steps / prereq_runs / prereq_step_results / project_variable_cache) + project columns,Done,2026-05-19,Project-level setup chain + variable pool
+14.2,Phase 1.14 - Prerequisites,Backend: store CRUD + run lifecycle + project-pool variable cache,Done,2026-05-19,listPrereqSteps / startPrereqRun / cacheProjectVariable etc.
+14.3,Phase 1.14 - Prerequisites,Backend: prereqRunner.ts (sequential exec, retries, wait, TTL, captures to project pool),Done,2026-05-19,Mirrors flowRunner with project-scoped persistence
+14.4,Phase 1.14 - Prerequisites,Backend: monitor.ts substitutes project-pool {{vars}} into every standalone URL check,Done,2026-05-19,URL custom headers and body now resolve {{auth_token}} etc.
+14.5,Phase 1.14 - Prerequisites,Backend: flowRunner.ts merges project pool + flow cache (flow-scoped wins on conflict),Done,2026-05-19,Hierarchical variable scoping (project < flow)
+14.6,Phase 1.14 - Prerequisites,Backend: monitor tick auto-runs due prereq chains (before URLs/flows),Done,2026-05-19,Tokens stay warm without manual refresh
+14.7,Phase 1.14 - Prerequisites,Backend: REST endpoints (CRUD prereq steps / run / list runs / get vars / clear vars),Done,2026-05-19,7 new routes wired in index.ts
+14.8,Phase 1.14 - Prerequisites,Frontend: PrereqsPanel — collapsible panel above tab nav with status header + Run Now,Done,2026-05-19,Visible on both URLs and Flows tabs
+14.9,Phase 1.14 - Prerequisites,Frontend: PrereqStepEditorForm (shares 7-tab UX with FlowStep editor),Done,2026-05-19,Reuses BodyEditor / AssertionsEditor / ExtractionsEditor / RetryWaitEditor
+14.10,Phase 1.14 - Prerequisites,Frontend: Variables hint in Flow step editor now includes prereq-chain vars,Done,2026-05-19,Surfaced via projectVars prop loaded by App
+14.11,Phase 1.14 - Prerequisites,Frontend: live project variable list (with TTL countdown) + Clear vars button,Done,2026-05-19,Renders captured pool inline in the panel
+14.12,Phase 1.14 - Prerequisites,Frontend: per-project schedule controls (interval + enable/disable),Done,2026-05-19,Saves via PATCH /projects/:id with new fields
+14.13,Phase 1.14 - Prerequisites,Smoke test: prereq captures token + URL substitutes it + body-contains assertion passes,Done,2026-05-19,End-to-end substitution proven via httpbin /post → /headers
+14.14,Phase 1.14 - Prerequisites,Backend: {{var}} substitution inside assertion config (body-contains text),Done,2026-05-19,Closes the brittleness gap — assertions tracking rotating session/auth tokens stay green
+14.15,Phase 1.14 - Prerequisites,Backend: evaluateAssertions accepts vars param + 3 callsites wire it through (monitor / flowRunner / prereqRunner),Done,2026-05-19,Single source of truth - same vars used for substitution everywhere
+14.16,Phase 1.14 - Prerequisites,Frontend: assertion UI hints {{var}} support (placeholder + tip line),Done,2026-05-19,Users discover the feature without docs
+14.17,Phase 1.14 - Prerequisites,Smoke test: prereq re-run after pool clear keeps flow green automatically,Done,2026-05-19,Proven across 3 step shapes (body / header / query param) on Default project
+14.18,Phase 1.14 - Prerequisites,Backend: split runners into kickoff (sync runId) + executeRun (background); new /run-async endpoints return 202 with runId,Done,2026-05-19,Frontend can now show live per-step progress instead of a blocking spinner
+14.19,Phase 1.14 - Prerequisites,Frontend: FlowCard + PrereqsPanel poll runId every 500ms; render running-pulse pill / queued dashed pill / progress bar,Done,2026-05-19,Step state transitions queued > running > done in real time
+14.20,Phase 1.14 - Prerequisites,UX: progress bar shows 'Step N of M running...' + completed count above step list,Done,2026-05-19,Replaces 'simply loading n loading' opaque spinner
+14.21,Phase 1.14 - Prerequisites,Backend: force flag on kickoff functions bypasses smart TTL skip-cache; /run-async accepts ?force=true,Done,2026-05-19,Production-grade pattern - human clicks bypass caches, scheduler keeps them
+14.22,Phase 1.14 - Prerequisites,Frontend: manual Run-now buttons always pass force=true (FlowCard + PrereqsPanel),Done,2026-05-19,Button now does what it says - no more confusing SKIPPED on click
+14.23,Phase 1.14 - Prerequisites,Smoke test: scheduler skips when fresh / manual click always refreshes the pool,Done,2026-05-19,Verified pool value before/after to prove both paths
+15.1,Phase 1.15 - UX hardening,Active project persists across page refresh (localStorage),Done,2026-05-19,Refresh keeps you where you were instead of dumping to default
+15.2,Phase 1.15 - UX hardening,Per-project scroll memory: save on leave / restore on return / top on fresh,Done,2026-05-19,Switching projects no longer 'inherits' middle-of-page scroll from the previous one
+15.3,Phase 1.15 - UX hardening,Prereq panel auto-collapses 1.5s after run completes (restores pre-click state),Done,2026-05-19,Expands during run for live progress then snaps back as if untouched
+15.4,Phase 1.15 - UX hardening,Two-click inline confirm for step delete (replaces native window.confirm),Done,2026-05-19,Avoids ugly browser confirm modal nested inside our editor modal
+15.5,Phase 1.15 - UX hardening,Document title reflects active project + failing count,Done,2026-05-19,Tab title now '(3 failing) Project Name - Functional Monitor'
+15.6,Phase 1.15 - UX hardening,Sidebar shows failing-count badge per project (pulsing red),Done,2026-05-19,Spot failing projects at a glance without clicking each one
+15.7,Phase 1.15 - UX hardening,Step rows truncate long URLs cleanly (ellipsis + monospace),Done,2026-05-19,Prevents long URLs from pushing the edit hint off the card

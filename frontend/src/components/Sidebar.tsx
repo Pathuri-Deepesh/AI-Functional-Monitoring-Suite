@@ -36,13 +36,23 @@ export function Sidebar(props: {
           {projects.map((p) => {
             const projectUrls = urls.filter((u) => u.projectId === p.id);
             const health = computeHealth(projectUrls);
+            const failingCount = projectUrls.filter(
+              (u) => u.statusGroup === "5xx" || u.statusGroup === "4xx" || u.statusGroup === "error"
+            ).length;
             const initial = (p.name[0] ?? "?").toUpperCase();
             const color = colorForName(p.name);
+            const isActive = activeProjectId === p.id;
             return (
               <button
                 key={p.id}
-                className={`project-card ${activeProjectId === p.id ? "active" : ""}`}
+                className={`project-card ${isActive ? "active" : ""}`}
                 onClick={() => onSelect(p.id)}
+                aria-current={isActive ? "page" : undefined}
+                title={
+                  failingCount > 0
+                    ? `${p.name} — ${failingCount} failing endpoint${failingCount === 1 ? "" : "s"}`
+                    : p.name
+                }
               >
                 <div className="project-avatar" style={{ background: color }}>
                   {initial}
@@ -56,6 +66,14 @@ export function Sidebar(props: {
                     </span>
                   </div>
                 </div>
+                {failingCount > 0 && (
+                  <span
+                    className="project-fail-badge"
+                    aria-label={`${failingCount} failing endpoint${failingCount === 1 ? "" : "s"}`}
+                  >
+                    {failingCount}
+                  </span>
+                )}
               </button>
             );
           })}

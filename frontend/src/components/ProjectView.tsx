@@ -3,8 +3,17 @@ import { UrlCard } from "./UrlCard";
 import { KpiBar } from "./KpiBar";
 import { TimeRangeSelector } from "./TimeRangeSelector";
 import { FlowCard } from "./FlowCard";
+import { PrereqsPanel } from "./PrereqsPanel";
 import { fetchSparkline, listProjectFlows } from "../api";
-import type { Flow, HttpMethod, MonitoredUrl, Project, SparklinePoint, StatusGroup } from "../types";
+import type {
+  Flow,
+  HttpMethod,
+  MonitoredUrl,
+  PrereqStep,
+  Project,
+  SparklinePoint,
+  StatusGroup,
+} from "../types";
 
 const GROUP_ORDER: StatusGroup[] = ["2xx", "3xx", "4xx", "5xx", "error"];
 const GROUP_LABEL: Record<StatusGroup, string> = {
@@ -32,6 +41,8 @@ interface Props {
   onAddStep: (flow: Flow) => void;
   onEditStep: (flow: Flow, stepId: string) => void;
   onDeleteFlow: (flow: Flow) => void;
+  onAddPrereqStep: (siblings: PrereqStep[]) => void;
+  onEditPrereqStep: (step: PrereqStep, siblings: PrereqStep[]) => void;
   refreshTick: number;
 }
 
@@ -210,6 +221,15 @@ export function ProjectView(props: Props) {
       <TimeRangeSelector value={windowMinutes} onChange={setWindowMinutes} />
 
       <KpiBar urls={urls} flows={flows} sparklineByUrl={sparklineByUrl} windowMinutes={windowMinutes} />
+
+      {/* ===== PREREQS PANEL (visible regardless of which tab is active) ===== */}
+      <PrereqsPanel
+        project={project}
+        refreshTick={refreshTick}
+        onAddStep={props.onAddPrereqStep}
+        onEditStep={props.onEditPrereqStep}
+        onAfterRun={() => setFlowsTick((t) => t + 1)}
+      />
 
       {/* ===== TAB NAV ===== */}
       <nav className="tabnav" role="tablist" aria-label="Project sections">

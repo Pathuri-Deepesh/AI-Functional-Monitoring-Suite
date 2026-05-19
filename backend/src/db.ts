@@ -199,12 +199,90 @@ function initSchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_flow_runs_flow_time ON flow_runs(flow_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_step_results_run ON step_results(flow_run_id, position);
     CREATE INDEX IF NOT EXISTS idx_variable_cache_expiry ON variable_cache(expires_at);
+
+    -- ===== PREREQUISITES (project-level setup chain) =====
+    CREATE TABLE IF NOT EXISTS prereq_steps (
+      id                  TEXT PRIMARY KEY,
+      project_id          TEXT NOT NULL,
+      position            INTEGER NOT NULL,
+      description         TEXT NOT NULL DEFAULT '',
+      url                 TEXT NOT NULL,
+      method              TEXT NOT NULL DEFAULT 'GET',
+      body_type           TEXT NOT NULL DEFAULT 'none',
+      body                TEXT NOT NULL DEFAULT '',
+      body_content_type   TEXT NOT NULL DEFAULT '',
+      api_key_id          TEXT,
+      assertions_json     TEXT NOT NULL DEFAULT '[]',
+      custom_headers_json TEXT NOT NULL DEFAULT '[]',
+      query_params_json   TEXT NOT NULL DEFAULT '[]',
+      extractions_json    TEXT NOT NULL DEFAULT '[]',
+      wait_before_ms      INTEGER NOT NULL DEFAULT 0,
+      max_retries         INTEGER NOT NULL DEFAULT 0,
+      retry_backoff_ms    INTEGER NOT NULL DEFAULT 1000,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS prereq_runs (
+      id                TEXT PRIMARY KEY,
+      project_id        TEXT NOT NULL,
+      started_at        INTEGER NOT NULL,
+      ended_at          INTEGER,
+      ok                INTEGER NOT NULL DEFAULT 0,
+      failed_at_step_id TEXT,
+      variables_json    TEXT NOT NULL DEFAULT '{}',
+      total_ms          INTEGER,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS prereq_step_results (
+      id                     TEXT PRIMARY KEY,
+      prereq_run_id          TEXT NOT NULL,
+      step_id                TEXT NOT NULL,
+      position               INTEGER NOT NULL,
+      status_code            INTEGER,
+      status_group           TEXT,
+      error_reason           TEXT,
+      dns_ms                 INTEGER,
+      tcp_ms                 INTEGER,
+      tls_ms                 INTEGER,
+      ttfb_ms                INTEGER,
+      download_ms            INTEGER,
+      total_ms               INTEGER,
+      assertion_results_json TEXT NOT NULL DEFAULT '[]',
+      extracted_values_json  TEXT NOT NULL DEFAULT '[]',
+      attempts               INTEGER NOT NULL DEFAULT 1,
+      skipped                INTEGER NOT NULL DEFAULT 0,
+      skip_reason            TEXT,
+      ok                     INTEGER NOT NULL,
+      checked_at             INTEGER NOT NULL,
+      FOREIGN KEY (prereq_run_id) REFERENCES prereq_runs(id) ON DELETE CASCADE
+    );
+
+    -- Project-wide variable cache (populated by prereq runs; consumed by URLs + flows)
+    CREATE TABLE IF NOT EXISTS project_variable_cache (
+      project_id     TEXT NOT NULL,
+      variable_name  TEXT NOT NULL,
+      value          TEXT NOT NULL,
+      captured_at    INTEGER NOT NULL,
+      expires_at     INTEGER NOT NULL,
+      PRIMARY KEY (project_id, variable_name),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_prereq_steps_project ON prereq_steps(project_id, position);
+    CREATE INDEX IF NOT EXISTS idx_prereq_runs_project_time ON prereq_runs(project_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_prereq_step_results_run ON prereq_step_results(prereq_run_id, position);
+    CREATE INDEX IF NOT EXISTS idx_project_variable_cache_expiry ON project_variable_cache(expires_at);
   `);
 
   // Idempotent column additions for existing databases
   ensureColumn(d, "urls", "custom_headers_json", "custom_headers_json TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(d, "urls", "query_params_json", "query_params_json TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(d, "urls", "body_content_type", "body_content_type TEXT NOT NULL DEFAULT ''");
+  ensureColumn(d, "projects", "prereq_interval_minutes", "prereq_interval_minutes INTEGER NOT NULL DEFAULT 30");
+  ensureColumn(d, "projects", "prereq_enabled", "prereq_enabled INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(d, "projects", "prereq_last_run_at", "prereq_last_run_at INTEGER");
 }
 
 function migrateFromJsonIfNeeded(d: DatabaseSync): void {
@@ -307,6 +385,16 @@ export function pruneOldChecks(): void {
   const flowRunResult = db().prepare("DELETE FROM flow_runs WHERE started_at < ?").run(cutoff);
   if (flowRunResult.changes > 0) {
     console.log(`[db] pruned ${flowRunResult.changes} old flow run(s)`);
+  }
+  // Prune old prereq runs
+  const prereqRunResult = db().prepare("DELETE FROM prereq_runs WHERE started_at < ?").run(cutoff);
+  if (prereqRunResult.changes > 0) {
+    console.log(`[db] pruned ${prereqRunResult.changes} old prereq run(s)`);
+  }
+  // Prune expired project-variable cache
+  const pvc = db().prepare("DELETE FROM project_variable_cache WHERE expires_at < ?").run(Date.now());
+  if (pvc.changes > 0) {
+    console.log(`[db] pruned ${pvc.changes} expired project variable(s)`);
   }
 }
 

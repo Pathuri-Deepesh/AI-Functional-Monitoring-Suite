@@ -8,6 +8,7 @@ import {
   getFlowRun,
   getFlowWithSteps,
   getProject,
+  getProjectVariables,
   markFlowRunCompletedAt,
   recordStepResult,
   resolveApiKeyHeader,
@@ -26,7 +27,12 @@ import type {
   Timings,
 } from "./types.js";
 
-const inFlight = new Map<string, Promise<FlowRun | undefined>>();
+interface InFlightRun {
+  runId: string;
+  done: Promise<FlowRun | undefined>;
+}
+
+const inFlight = new Map<string, InFlightRun>();
 
 function classify(code: number): StatusGroup {
   if (code >= 200 && code < 300) return "2xx";
@@ -86,6 +92,8 @@ async function executeStep(
   step: FlowStep,
   vars: Record<string, string>
 ): Promise<StepOutcome> {
+  // Note: `vars` is used both for header/body substitution above (via substituteStep)
+  // and for resolving {{vars}} inside assertion config (e.g., body-contains).
   // Resolve auth header from project API key
   const headers: Record<string, string> = {};
   if (step.apiKeyId) {
@@ -130,11 +138,15 @@ async function executeStep(
       errorReason = isHttpFailure ? reasonForStatus(code) : null;
     }
 
-    const assertionResults = evaluateAssertions(step.assertions, {
-      statusCode,
-      totalMs: result.timings.totalMs,
-      responseBody: result.responseBody,
-    });
+    const assertionResults = evaluateAssertions(
+      step.assertions,
+      {
+        statusCode,
+        totalMs: result.timings.totalMs,
+        responseBody: result.responseBody,
+      },
+      vars
+    );
     const statusOk = statusGroup === "2xx" || statusGroup === "3xx";
     const allAssertionsPassed = assertionResults.every((r) => r.passed);
     const stepOk = statusOk && allAssertionsPassed;
@@ -179,18 +191,24 @@ function getStepProjectId(step: FlowStep): string {
  * Execute one full flow run. All steps run in order. Smart cache may skip
  * steps whose extracted variables are still TTL-fresh. On failure, the
  * `stopOnFailure` flag determines whether remaining steps are skipped.
+ *
+ * Takes a pre-created runId so callers can know it before execution starts —
+ * letting them poll progress without waiting for the whole run to finish.
  */
-async function doRun(flowId: string): Promise<FlowRun | undefined> {
-  const flow = getFlowWithSteps(flowId);
-  if (!flow) return undefined;
-  if (!flow.enabled) return undefined;
-
+async function executeRun(
+  flow: ReturnType<typeof getFlowWithSteps> & {},
+  runId: string,
+  startedAt: number,
+  options: { force?: boolean } = {}
+): Promise<FlowRun | undefined> {
   const project = getProject(flow.projectId);
-  const startedAt = Date.now();
-  const runId = startFlowRun(flowId);
 
-  // Seed variables from TTL cache (cross-run reuse)
-  const variables: Record<string, string> = { ...getCachedVariables(flowId) };
+  // Seed variables. Order matters: project pool first (lowest priority), then
+  // flow-scoped TTL cache (flow-scoped wins on name conflict).
+  const variables: Record<string, string> = {
+    ...getProjectVariables(flow.projectId),
+    ...getCachedVariables(flow.id),
+  };
 
   let allOk = true;
   let failedAtStepId: string | null = null;
@@ -216,8 +234,10 @@ async function doRun(flowId: string): Promise<FlowRun | undefined> {
       continue;
     }
 
-    // Smart cache: skip if all extracted variables are TTL-fresh
-    if (canSkipStepFromCache(step, variables)) {
+    // Smart cache: skip if all extracted variables are TTL-fresh.
+    // Always bypassed when `force` is set — the manual "Run now" button must
+    // do real work or it feels broken to the user.
+    if (!options.force && canSkipStepFromCache(step, variables)) {
       const cachedExtractions: ExtractedValue[] = step.extractions.map((ex) => ({
         saveAs: ex.saveAs,
         value: variables[ex.saveAs] ?? "",
@@ -258,7 +278,7 @@ async function doRun(flowId: string): Promise<FlowRun | undefined> {
     }
     for (const ex of step.extractions) {
       if ((ex.ttlSeconds ?? 0) > 0 && variables[ex.saveAs] != null) {
-        cacheVariable(flowId, ex.saveAs, variables[ex.saveAs], ex.ttlSeconds!);
+        cacheVariable(flow.id, ex.saveAs, variables[ex.saveAs], ex.ttlSeconds!);
       }
     }
 
@@ -287,7 +307,7 @@ async function doRun(flowId: string): Promise<FlowRun | undefined> {
 
   const totalMs = Date.now() - startedAt;
   finishFlowRun({ id: runId, ok: allOk, failedAtStepId, variables, totalMs });
-  markFlowRunCompletedAt(flowId, startedAt);
+  markFlowRunCompletedAt(flow.id, startedAt);
 
   // Slack alert on failure (won't double-send if same run is alerted from elsewhere)
   if (!allOk && project) {
@@ -300,12 +320,36 @@ async function doRun(flowId: string): Promise<FlowRun | undefined> {
   return getFlowRun(runId);
 }
 
-export function runFlow(flowId: string): Promise<FlowRun | undefined> {
+/**
+ * Create a run row immediately + kick off execution in the background.
+ * Returns the runId synchronously so callers can poll step-by-step progress
+ * while the flow is still running.
+ */
+export function kickoffFlow(
+  flowId: string,
+  options: { force?: boolean } = {}
+): { runId: string; alreadyRunning: boolean } | undefined {
   const existing = inFlight.get(flowId);
-  if (existing) return existing;
-  const p = doRun(flowId).finally(() => inFlight.delete(flowId));
-  inFlight.set(flowId, p);
-  return p;
+  if (existing) return { runId: existing.runId, alreadyRunning: true };
+
+  const flow = getFlowWithSteps(flowId);
+  if (!flow || !flow.enabled) return undefined;
+
+  const startedAt = Date.now();
+  const runId = startFlowRun(flowId);
+  const done = executeRun(flow, runId, startedAt, options).finally(() => inFlight.delete(flowId));
+  inFlight.set(flowId, { runId, done });
+  return { runId, alreadyRunning: false };
+}
+
+/**
+ * Run a flow and wait for it to finish. Existing blocking semantics —
+ * kept for the scheduler tick and any callers that want the final result.
+ */
+export function runFlow(flowId: string): Promise<FlowRun | undefined> {
+  const started = kickoffFlow(flowId);
+  if (!started) return Promise.resolve(undefined);
+  return inFlight.get(flowId)?.done ?? Promise.resolve(undefined);
 }
 
 function emptyTimings(): Timings {
