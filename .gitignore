@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# SQLite temp files (WAL mode auto-generates these)
+backend/data/db.sqlite-shm
+backend/data/db.sqlite-wal
+backend/data/*.tmp
+
+# Generated audit reports (regenerated on demand)
+backend/data/reports/*.html
+
+# Legacy migration backups
+backend/data/*.bak
+backend/data/*.migrated.bak
+backend/data/urls.json
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code local cache (keep .mcp.json — project-level config)
+.claude/cache/

@@ -1,0 +1,71 @@
+#,Phase,Task,Status,Done On,Notes
+1.1,Phase 1 - Foundations,Backend project setup (Node.js + TypeScript + Express),Done,2026-04-29,tsx watch dev server
+1.2,Phase 1 - Foundations,Frontend project setup (React + Vite + TypeScript),Done,2026-04-29,Vite dev server with proxy to backend
+1.3,Phase 1 - Foundations,Implement URL ingestion endpoint (POST /api/urls),Done,2026-04-29,Add and remove URLs via REST
+1.4,Phase 1 - Foundations,Implement status checker (HTTP GET to URL),Done,2026-04-29,Captures HTTP status code
+1.5,Phase 1 - Foundations,Group URLs by status family (2xx/3xx/4xx/5xx/error),Done,2026-04-29,classify() pure function
+1.6,Phase 1 - Foundations,Frontend dashboard with grouped count cards,Done,2026-04-30,React + CSS color-coded
+1.7,Phase 1 - Foundations,Real-time refresh (frontend polls every 3s),Done,2026-04-30,setInterval + useEffect
+1.8,Phase 1 - Foundations,JSON file persistence with atomic writes,Done,2026-04-30,data/db.json with .tmp + rename
+2.1,Phase 1.5 - Production polish,Project segregation (multiple projects + sidebar),Done,2026-05-05,Each project = monitored service
+2.2,Phase 1.5 - Production polish,Per-project API key vault,Done,2026-05-05,Configurable header name + prefix
+2.3,Phase 1.5 - Production polish,Auth header injection for monitored URLs,Done,2026-05-05,Bearer / x-api-key / Basic supported
+2.4,Phase 1.5 - Production polish,Per-URL configurable check interval,Done,2026-05-05,Default 5 min; range 1-1440
+2.5,Phase 1.5 - Production polish,5-phase HTTP latency tracking,Done,2026-05-05,DNS / TCP / TLS / TTFB / Download via raw https
+2.6,Phase 1.5 - Production polish,Description field per URL,Done,2026-05-05,Free-text endpoint label
+2.7,Phase 1.5 - Production polish,Error reason mapping (human-readable),Done,2026-05-05,DNS fail / cert expired / 401 / 503 etc
+2.8,Phase 1.5 - Production polish,Slack webhook integration for failure alerts,Done,2026-05-05,Auto-fire on transition to failing
+2.9,Phase 1.5 - Production polish,Latency bar visualization (per-check breakdown),Done,2026-05-05,Color-coded segments per phase
+3.1,Phase 1.6 - UX refresh,Modal/dialog system (replace browser prompts),Done,2026-05-07,Reusable Modal + ConfirmDialog
+3.2,Phase 1.6 - UX refresh,Toast notifications (success / error feedback),Done,2026-05-07,Auto-dismiss after 3.5s
+3.3,Phase 1.6 - UX refresh,Design token system (spacing / type / radius / motion),Done,2026-05-07,CSS custom properties
+3.4,Phase 1.6 - UX refresh,Polished sidebar with project avatars + health dots,Done,2026-05-07,Color-hashed initials
+3.5,Phase 1.6 - UX refresh,Animated transitions and hover states,Done,2026-05-07,Cards lift; modals slide-up
+4.1,Phase 1.7 - Storage upgrade,Migrate from JSON file to SQLite (node:sqlite),Done,2026-05-08,Built-in - no native compile
+4.2,Phase 1.7 - Storage upgrade,Schema design (projects/keys/urls/checks tables),Done,2026-05-08,Foreign keys + indexes
+4.3,Phase 1.7 - Storage upgrade,Auto-migrate existing db.json to SQLite,Done,2026-05-08,Old file backed up as .migrated.bak
+4.4,Phase 1.7 - Storage upgrade,Persistent check history (every check stored),Done,2026-05-08,checks table with timestamps
+4.5,Phase 1.7 - Storage upgrade,7-day retention policy with auto-pruning,Done,2026-05-08,Hourly cleanup job
+4.6,Phase 1.7 - Storage upgrade,Extend retention to 365 days for long-range views,Done,2026-05-12,Was 7 days; now keeps a year
+5.1,Phase 1.8 - History UI,Sparkline component (24h latency trend),Done,2026-05-08,Pure SVG no library
+5.2,Phase 1.8 - History UI,Status strip (24h commit-graph style),Done,2026-05-08,Replaced by Activity Timeline (5.7)
+5.3,Phase 1.8 - History UI,Failure rate chip (color-coded by severity),Done,2026-05-08,Green <1% / Amber 1-5% / Red >5%
+5.4,Phase 1.8 - History UI,KPI bar (4 KPIs + project sparkline),Done,2026-05-08,Total / Healthy% / Avg latency / Failing
+5.5,Phase 1.8 - History UI,/api/urls/:id/history endpoint,Done,2026-05-08,Returns checks since timestamp
+5.6,Phase 1.8 - History UI,/api/urls/:id/stats endpoint,Done,2026-05-08,Total / failures / avg / p99
+5.7,Phase 1.8 - History UI,Activity Timeline (unified history viz),Done,2026-05-11,Replaces status strip + sparkline
+5.8,Phase 1.8 - History UI,Time Range Selector (24h/7d/30d/90d/1y/Custom) - LinkedIn style,Done,2026-05-12,Re-renders all charts based on selection
+5.10,Phase 1.8 - History UI,Time Range Selector visual redesign (segmented pill + sliding indicator),Done,2026-05-12,Datadog/Linear-inspired premium look
+12.1,Phase 1.12 - UX polish,Skeleton loaders on first paint,Done,2026-05-12,Shimmer placeholders before /api/status arrives
+12.2,Phase 1.12 - UX polish,Spinner component + busy state in async buttons,Done,2026-05-12,Replaces text-only Checking... state
+12.3,Phase 1.12 - UX polish,Toast notifications with success/error/info icons,Done,2026-05-12,SVG icons + colored borders
+12.4,Phase 1.12 - UX polish,Pulse animation on failing/degraded health dots in sidebar,Done,2026-05-12,Calls attention to broken services
+12.5,Phase 1.12 - UX polish,Staggered fade+slide entrance for URL cards,Done,2026-05-12,40ms stagger between cards
+12.6,Phase 1.12 - UX polish,Smooth transitions on status pills + KPIs + chips,Done,2026-05-12,No more abrupt color/value snaps
+12.7,Phase 1.12 - UX polish,Consistent focus-visible rings across interactive elements,Done,2026-05-12,Keyboard navigation accessibility
+12.8,Phase 1.12 - UX polish,Reduced-motion media query (a11y),Done,2026-05-12,Respects prefers-reduced-motion
+5.9,Phase 1.8 - History UI,Dynamic axis labels (hours/days/dates) based on window,Done,2026-05-12,Activity Timeline auto-formats
+6.1,Phase 1.9 - Postman parity,HTTP method support (GET/POST/PUT/PATCH),Done,2026-05-11,DELETE blocked for safety
+6.2,Phase 1.9 - Postman parity,Body editor with type selector,Done,2026-05-11,JSON / form / urlencoded
+6.3,Phase 1.9 - Postman parity,Custom headers tab (key-value editor),Done,2026-05-11,Sent on every check
+6.4,Phase 1.9 - Postman parity,Query parameters tab (key-value editor),Done,2026-05-11,Appended to URL automatically
+6.5,Phase 1.9 - Postman parity,Assertions engine (4 v1 types),Done,2026-05-11,status equals / in range / latency under / body contains
+6.6,Phase 1.9 - Postman parity,Assertion result pills on URL cards,Done,2026-05-11,Green check / red X
+6.7,Phase 1.9 - Postman parity,Raw body type with custom Content-Type (Text/XML/HTML/JS/YAML/custom),Done,2026-05-12,Postman raw mode equivalent
+7.1,Phase 1.10 - Audit + Slack,Run Audit button (manual Check All),Done,2026-05-08,Concurrency capped at 8 parallel
+7.2,Phase 1.10 - Audit + Slack,HTML report generator,Done,2026-05-08,Standalone HTML in data/reports/
+7.3,Phase 1.10 - Audit + Slack,Slack Block Kit message format,Done,2026-05-08,Rich KPIs and failure details
+7.4,Phase 1.10 - Audit + Slack,Slack file upload (HTML attached),Done,2026-05-08,@slack/web-api files.uploadV2
+7.5,Phase 1.10 - Audit + Slack,Audit progress modal + result modal,Done,2026-05-08,Spinner during run; summary after
+7.6,Phase 1.10 - Audit + Slack,Get Slack Bot Token (xoxb-) and configure,Pending,,User: paste in Settings to enable Slack uploads
+8.1,Phase 1.11 - Discoverability,Search by URL/description/method,Done,2026-05-11,Filters list live as you type
+8.2,Phase 1.11 - Discoverability,Numbered pagination (LeetCode style),Done,2026-05-11,Smart ellipsis for many pages
+8.3,Phase 1.11 - Discoverability,Method filter chips (color-coded),Done,2026-05-11,GET green / POST orange / PUT cyan / PATCH purple
+8.4,Phase 1.11 - Discoverability,Search bar with icon + keyboard shortcut (/),Done,2026-05-11,Press / anywhere to focus
+8.5,Phase 1.11 - Discoverability,Result count chip in search,Done,2026-05-11,Highlights blue when filter active
+8.6,Phase 1.11 - Discoverability,New URLs appear at top of list,Done,2026-05-11,ORDER BY rowid DESC
+9.1,Demo & explanation,Demo: API key with/without (httpbin/bearer),Done,2026-05-06,Showed 401 vs 200 with same URL
+9.2,Demo & explanation,Demo: Basic Auth with httpbin/basic-auth,Done,2026-05-06,Different auth style demonstrated
+9.3,Demo & explanation,Demo: POST + JSON body to httpbin/post,Done,2026-05-11,Confirmed body sent correctly
+9.4,Demo & explanation,Explanation doc: how Phase 1 connects to Phase 2,Done,2026-05-05,Mapped each Phase 2 requirement to Phase 1 file
+9.5,Demo & explanation,Manager meeting: present plan and get approval,Pending,,User to schedule

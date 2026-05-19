@@ -1,0 +1,216 @@
+import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { mkdirSync, readFileSync, renameSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+
+const DB_FILE = "./data/db.sqlite";
+const LEGACY_JSON = "./data/db.json";
+
+let dbSingleton: DatabaseSync | null = null;
+
+export function db(): DatabaseSync {
+  if (dbSingleton) return dbSingleton;
+  mkdirSync(dirname(DB_FILE), { recursive: true });
+  dbSingleton = new DatabaseSync(DB_FILE);
+  dbSingleton.exec("PRAGMA journal_mode = WAL;");
+  dbSingleton.exec("PRAGMA foreign_keys = ON;");
+  initSchema(dbSingleton);
+  migrateFromJsonIfNeeded(dbSingleton);
+  return dbSingleton;
+}
+
+/**
+ * Run a function inside a SQLite transaction.
+ * node:sqlite has no built-in transaction wrapper, so we manage BEGIN/COMMIT/ROLLBACK manually.
+ */
+export function tx<T>(fn: () => T): T {
+  const d = db();
+  d.exec("BEGIN");
+  try {
+    const result = fn();
+    d.exec("COMMIT");
+    return result;
+  } catch (err) {
+    d.exec("ROLLBACK");
+    throw err;
+  }
+}
+
+function ensureColumn(
+  d: DatabaseSync,
+  table: string,
+  column: string,
+  ddl: string
+): void {
+  const cols = d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    d.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
+function initSchema(d: DatabaseSync): void {
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id                TEXT PRIMARY KEY,
+      name              TEXT NOT NULL,
+      description       TEXT NOT NULL DEFAULT '',
+      slack_webhook_url TEXT NOT NULL DEFAULT '',
+      slack_bot_token   TEXT NOT NULL DEFAULT '',
+      slack_channel     TEXT NOT NULL DEFAULT '',
+      created_at        TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id            TEXT PRIMARY KEY,
+      project_id    TEXT NOT NULL,
+      name          TEXT NOT NULL,
+      value         TEXT NOT NULL,
+      header_name   TEXT NOT NULL DEFAULT 'Authorization',
+      header_prefix TEXT NOT NULL DEFAULT 'Bearer ',
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS urls (
+      id               TEXT PRIMARY KEY,
+      project_id       TEXT NOT NULL,
+      url              TEXT NOT NULL,
+      description      TEXT NOT NULL DEFAULT '',
+      api_key_id       TEXT,
+      interval_minutes INTEGER NOT NULL DEFAULT 5,
+      method           TEXT NOT NULL DEFAULT 'GET',
+      body_type        TEXT NOT NULL DEFAULT 'none',
+      body             TEXT NOT NULL DEFAULT '',
+      assertions_json  TEXT NOT NULL DEFAULT '[]',
+
+      status_code      INTEGER,
+      status_group     TEXT,
+      error_reason     TEXT,
+      timings_json     TEXT,
+      last_checked     TEXT,
+
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS checks (
+      id                     TEXT PRIMARY KEY,
+      url_id                 TEXT NOT NULL,
+      status_code            INTEGER,
+      status_group           TEXT,
+      error_reason           TEXT,
+      dns_ms                 INTEGER,
+      tcp_ms                 INTEGER,
+      tls_ms                 INTEGER,
+      ttfb_ms                INTEGER,
+      download_ms            INTEGER,
+      total_ms               INTEGER,
+      assertion_results_json TEXT NOT NULL DEFAULT '[]',
+      ok                     INTEGER NOT NULL,
+      checked_at             INTEGER NOT NULL,
+      FOREIGN KEY (url_id) REFERENCES urls(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_checks_url_time ON checks(url_id, checked_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_checks_time ON checks(checked_at);
+  `);
+
+  // Idempotent column additions for existing databases
+  ensureColumn(d, "urls", "custom_headers_json", "custom_headers_json TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(d, "urls", "query_params_json", "query_params_json TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(d, "urls", "body_content_type", "body_content_type TEXT NOT NULL DEFAULT ''");
+}
+
+function migrateFromJsonIfNeeded(d: DatabaseSync): void {
+  const projectCount = d.prepare("SELECT COUNT(*) AS c FROM projects").get() as { c: number };
+  if (projectCount.c > 0) return;
+  if (!existsSync(LEGACY_JSON)) return;
+
+  let parsed: { projects: any[]; urls: any[] };
+  try {
+    parsed = JSON.parse(readFileSync(LEGACY_JSON, "utf8"));
+  } catch {
+    console.warn("[db] could not parse legacy db.json — skipping migration");
+    return;
+  }
+  if (!parsed?.projects?.length && !parsed?.urls?.length) return;
+
+  const insertProject = d.prepare(
+    `INSERT INTO projects (id, name, description, slack_webhook_url, slack_bot_token, slack_channel, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  const insertKey = d.prepare(
+    `INSERT INTO api_keys (id, project_id, name, value, header_name, header_prefix)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  const insertUrl = d.prepare(
+    `INSERT INTO urls (id, project_id, url, description, api_key_id, interval_minutes,
+                       method, body_type, body, assertions_json,
+                       status_code, status_group, error_reason, timings_json, last_checked)
+     VALUES (?, ?, ?, ?, ?, ?, 'GET', 'none', '', '[]', ?, ?, ?, ?, ?)`
+  );
+
+  d.exec("BEGIN");
+  try {
+    for (const p of parsed.projects ?? []) {
+      insertProject.run(
+        p.id ?? randomUUID(),
+        p.name ?? "Untitled",
+        p.description ?? "",
+        p.slackWebhookUrl ?? "",
+        "",
+        "",
+        p.createdAt ?? new Date().toISOString()
+      );
+      for (const k of p.apiKeys ?? []) {
+        insertKey.run(
+          k.id ?? randomUUID(),
+          p.id,
+          k.name ?? "Untitled key",
+          k.value ?? "",
+          k.headerName ?? "Authorization",
+          k.headerPrefix ?? "Bearer "
+        );
+      }
+    }
+    for (const u of parsed.urls ?? []) {
+      insertUrl.run(
+        u.id ?? randomUUID(),
+        u.projectId,
+        u.url,
+        u.description ?? "",
+        u.apiKeyId ?? null,
+        Number(u.intervalMinutes ?? 5),
+        u.statusCode ?? null,
+        u.statusGroup ?? null,
+        u.errorReason ?? null,
+        u.timings ? JSON.stringify(u.timings) : null,
+        u.lastChecked ?? null
+      );
+    }
+    d.exec("COMMIT");
+  } catch (err) {
+    d.exec("ROLLBACK");
+    console.error("[db] migration failed:", err);
+    return;
+  }
+
+  try {
+    renameSync(LEGACY_JSON, `${LEGACY_JSON}.migrated.bak`);
+  } catch {}
+  console.log(
+    `[db] migrated ${parsed.projects?.length ?? 0} project(s), ${parsed.urls?.length ?? 0} URL(s) from legacy db.json`
+  );
+}
+
+// Keep 1 year of history so the dashboard can show 24h / 7d / 30d / 90d / 1y views.
+const RETENTION_DAYS = 365;
+
+export function pruneOldChecks(): void {
+  const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  const result = db().prepare("DELETE FROM checks WHERE checked_at < ?").run(cutoff);
+  if (result.changes > 0) {
+    console.log(`[db] pruned ${result.changes} old check(s) (older than ${RETENTION_DAYS} days)`);
+  }
+}
+
+export type { StatementSync };
