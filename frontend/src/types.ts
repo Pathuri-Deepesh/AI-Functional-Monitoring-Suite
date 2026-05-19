@@ -18,6 +18,11 @@ export interface Project {
   slackBotToken: string;
   slackChannel: string;
   apiKeys: ApiKey[];
+  prereqIntervalMinutes: number;
+  prereqEnabled: boolean;
+  prereqLastRunAt: number | null;
+  prereqLastRunOk: boolean | null;
+  prereqLastRunTotalMs: number | null;
   createdAt: string;
 }
 
@@ -210,4 +215,54 @@ export interface FlowRun {
   totalMs: number | null;
   variables: Record<string, string>;
   stepResults: StepResult[];
+}
+
+// ===== Prerequisites (project-level setup chain) =====
+
+export interface PrereqStep {
+  id: string;
+  projectId: string;
+  position: number;
+  description: string;
+  url: string;
+  method: HttpMethod;
+  bodyType: BodyType;
+  body: string;
+  bodyContentType: string;
+  apiKeyId: string | null;
+  customHeaders: KeyValue[];
+  queryParams: KeyValue[];
+  assertions: Assertion[];
+  extractions: Extraction[];
+  waitBeforeMs: number;
+  maxRetries: number;
+  retryBackoffMs: number;
+}
+
+export interface PrereqsBundle {
+  steps: PrereqStep[];
+  intervalMinutes: number;
+  enabled: boolean;
+  lastRunAt: number | null;
+  lastRunOk: boolean | null;
+  lastRunTotalMs: number | null;
+}
+
+export interface PrereqRun {
+  id: string;
+  projectId: string;
+  startedAt: number;
+  endedAt: number | null;
+  ok: boolean;
+  failedAtStepId: string | null;
+  totalMs: number | null;
+  variables: Record<string, string>;
+  stepResults: StepResult[];
+}
+
+export interface ProjectVariable {
+  name: string;
+  value: string;
+  capturedAt: number;
+  expiresAt: number | null;
 }

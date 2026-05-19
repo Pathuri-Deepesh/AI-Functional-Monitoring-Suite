@@ -2,37 +2,34 @@ import { reasonForError, reasonForStatus } from "./errorReason.js";
 import { evaluateAssertions } from "./assertions.js";
 import { extractFromResponse, substitute } from "./extraction.js";
 import {
-  cacheVariable,
-  finishFlowRun,
-  getCachedVariables,
-  getFlowRun,
-  getFlowWithSteps,
+  cacheProjectVariable,
+  finishPrereqRun,
   getProject,
   getProjectVariables,
-  markFlowRunCompletedAt,
-  recordStepResult,
+  getPrereqRun,
+  listPrereqSteps,
+  markPrereqRunCompletedAt,
+  recordPrereqStepResult,
   resolveApiKeyHeader,
-  startFlowRun,
+  startPrereqRun,
 } from "./store.js";
 import { timedFetch } from "./timing.js";
-import { sendFlowFailureAlert } from "./slack.js";
 import type {
   ExtractedValue,
-  Flow,
-  FlowRun,
-  FlowStep,
   KeyValue,
   MonitoredUrl,
+  PrereqRun,
+  PrereqStep,
   StatusGroup,
   Timings,
 } from "./types.js";
 
-interface InFlightRun {
+interface InFlightPrereq {
   runId: string;
-  done: Promise<FlowRun | undefined>;
+  done: Promise<PrereqRun | undefined>;
 }
 
-const inFlight = new Map<string, InFlightRun>();
+const inFlight = new Map<string, InFlightPrereq>();
 
 function classify(code: number): StatusGroup {
   if (code >= 200 && code < 300) return "2xx";
@@ -50,11 +47,7 @@ function substituteKv(items: KeyValue[], vars: Record<string, string>): KeyValue
   return items.map((it) => ({ key: it.key, value: substitute(it.value, vars) }));
 }
 
-/**
- * Apply variable substitution to all string fields of a step before execution.
- * Variables come from earlier steps in the same flow run (and from the TTL cache).
- */
-function substituteStep(step: FlowStep, vars: Record<string, string>): FlowStep {
+function substituteStep(step: PrereqStep, vars: Record<string, string>): PrereqStep {
   return {
     ...step,
     url: substitute(step.url, vars),
@@ -64,14 +57,8 @@ function substituteStep(step: FlowStep, vars: Record<string, string>): FlowStep 
   };
 }
 
-/**
- * Try to skip a step entirely if all of its extracted variables are present in
- * the TTL cache and still fresh. This is the "smart caching" optimization:
- * don't re-login if the token is still valid.
- */
-function canSkipStepFromCache(step: FlowStep, cachedVars: Record<string, string>): boolean {
+function canSkipStepFromCache(step: PrereqStep, cachedVars: Record<string, string>): boolean {
   if (step.extractions.length === 0) return false;
-  // Every extraction must (a) have a TTL set AND (b) have a cached value
   return step.extractions.every(
     (ex) => (ex.ttlSeconds ?? 0) > 0 && cachedVars[ex.saveAs] != null && ex.saveAs.length > 0
   );
@@ -89,17 +76,14 @@ interface StepOutcome {
 }
 
 async function executeStep(
-  step: FlowStep,
+  step: PrereqStep,
   vars: Record<string, string>
 ): Promise<StepOutcome> {
-  // Note: `vars` is used both for header/body substitution above (via substituteStep)
-  // and for resolving {{vars}} inside assertion config (e.g., body-contains).
-  // Resolve auth header from project API key
   const headers: Record<string, string> = {};
   if (step.apiKeyId) {
     const dummyUrl = {
       apiKeyId: step.apiKeyId,
-      projectId: getStepProjectId(step),
+      projectId: step.projectId,
     } as MonitoredUrl;
     const auth = resolveApiKeyHeader(dummyUrl);
     if (auth) headers[auth.name] = auth.value;
@@ -179,45 +163,32 @@ async function executeStep(
 }
 
 /**
- * Look up the project the step belongs to (via its flow). Cheap lookup; could
- * be cached but flows/steps tables are small.
- */
-function getStepProjectId(step: FlowStep): string {
-  const flow = getFlowWithSteps(step.flowId);
-  return flow?.projectId ?? "";
-}
-
-/**
- * Execute one full flow run. All steps run in order. Smart cache may skip
- * steps whose extracted variables are still TTL-fresh. On failure, the
- * `stopOnFailure` flag determines whether remaining steps are skipped.
+ * Run the project's prereq chain. Sequential, stop-on-failure (always — these
+ * are setup steps and downstream depends on upstream tokens). Captured
+ * variables with a TTL are persisted to the project pool so URLs and Flows
+ * can reference them via `{{name}}`.
  *
- * Takes a pre-created runId so callers can know it before execution starts —
- * letting them poll progress without waiting for the whole run to finish.
+ * Takes a pre-created runId so callers can poll progress while it executes.
  */
 async function executeRun(
-  flow: ReturnType<typeof getFlowWithSteps> & {},
+  projectId: string,
   runId: string,
   startedAt: number,
   options: { force?: boolean } = {}
-): Promise<FlowRun | undefined> {
-  const project = getProject(flow.projectId);
+): Promise<PrereqRun | undefined> {
+  const steps = listPrereqSteps(projectId);
 
-  // Seed variables. Order matters: project pool first (lowest priority), then
-  // flow-scoped TTL cache (flow-scoped wins on name conflict).
-  const variables: Record<string, string> = {
-    ...getProjectVariables(flow.projectId),
-    ...getCachedVariables(flow.id),
-  };
+  // Seed from already-cached project vars (so a partial chain can reuse a fresh token)
+  const variables: Record<string, string> = { ...getProjectVariables(projectId) };
 
   let allOk = true;
   let failedAtStepId: string | null = null;
   let upstreamFailed = false;
 
-  for (const step of flow.steps) {
+  for (const step of steps) {
     if (upstreamFailed) {
-      recordStepResult({
-        flowRunId: runId,
+      recordPrereqStepResult({
+        prereqRunId: runId,
         stepId: step.id,
         position: step.position,
         statusCode: null,
@@ -228,23 +199,21 @@ async function executeRun(
         extractedValues: [],
         attempts: 0,
         skipped: true,
-        skipReason: "Upstream step failed and Stop-on-failure is ON",
+        skipReason: "Upstream prereq step failed",
         ok: false,
       });
       continue;
     }
 
-    // Smart cache: skip if all extracted variables are TTL-fresh.
-    // Always bypassed when `force` is set — the manual "Run now" button must
-    // do real work or it feels broken to the user.
+    // Smart cache — bypassed when `force` is set (manual Run-now click).
     if (!options.force && canSkipStepFromCache(step, variables)) {
       const cachedExtractions: ExtractedValue[] = step.extractions.map((ex) => ({
         saveAs: ex.saveAs,
         value: variables[ex.saveAs] ?? "",
         fromCache: true,
       }));
-      recordStepResult({
-        flowRunId: runId,
+      recordPrereqStepResult({
+        prereqRunId: runId,
         stepId: step.id,
         position: step.position,
         statusCode: null,
@@ -255,35 +224,31 @@ async function executeRun(
         extractedValues: cachedExtractions,
         attempts: 0,
         skipped: true,
-        skipReason: "All variables still fresh in cache (TTL valid)",
+        skipReason: "All variables still fresh in project pool (TTL valid)",
         ok: true,
       });
       continue;
     }
 
-    // Optional wait before this step
     if (step.waitBeforeMs > 0) {
       await sleep(step.waitBeforeMs);
     }
 
-    // Substitute {{vars}} into this step's fields
     const resolved = substituteStep(step, variables);
-
     const outcome = await executeStep(resolved, variables);
 
-    // Stash extracted values into the running `variables` map AND cache them
-    // with TTL if configured.
+    // Stash into the in-run variables map and persist to the project pool with TTL.
     for (const ev of outcome.extractedValues) {
       variables[ev.saveAs] = ev.value;
     }
     for (const ex of step.extractions) {
       if ((ex.ttlSeconds ?? 0) > 0 && variables[ex.saveAs] != null) {
-        cacheVariable(flow.id, ex.saveAs, variables[ex.saveAs], ex.ttlSeconds!);
+        cacheProjectVariable(projectId, ex.saveAs, variables[ex.saveAs], ex.ttlSeconds!);
       }
     }
 
-    recordStepResult({
-      flowRunId: runId,
+    recordPrereqStepResult({
+      prereqRunId: runId,
       stepId: step.id,
       position: step.position,
       statusCode: outcome.statusCode,
@@ -301,55 +266,43 @@ async function executeRun(
     if (!outcome.ok) {
       allOk = false;
       if (!failedAtStepId) failedAtStepId = step.id;
-      if (flow.stopOnFailure) upstreamFailed = true;
+      upstreamFailed = true; // prereqs always stop on failure
     }
   }
 
   const totalMs = Date.now() - startedAt;
-  finishFlowRun({ id: runId, ok: allOk, failedAtStepId, variables, totalMs });
-  markFlowRunCompletedAt(flow.id, startedAt);
+  finishPrereqRun({ id: runId, ok: allOk, failedAtStepId, variables, totalMs });
+  markPrereqRunCompletedAt(projectId, startedAt);
 
-  // Slack alert on failure (won't double-send if same run is alerted from elsewhere)
-  if (!allOk && project) {
-    const run = getFlowRun(runId);
-    if (run) {
-      void sendFlowFailureAlert(flow as Flow, run, project);
-    }
-  }
-
-  return getFlowRun(runId);
+  return getPrereqRun(runId);
 }
 
 /**
- * Create a run row immediately + kick off execution in the background.
- * Returns the runId synchronously so callers can poll step-by-step progress
- * while the flow is still running.
+ * Create a prereq run row immediately + kick off in background.
+ * Returns runId synchronously so callers can poll step-by-step progress.
  */
-export function kickoffFlow(
-  flowId: string,
+export function kickoffPrereqChain(
+  projectId: string,
   options: { force?: boolean } = {}
 ): { runId: string; alreadyRunning: boolean } | undefined {
-  const existing = inFlight.get(flowId);
+  const existing = inFlight.get(projectId);
   if (existing) return { runId: existing.runId, alreadyRunning: true };
 
-  const flow = getFlowWithSteps(flowId);
-  if (!flow || !flow.enabled) return undefined;
+  const project = getProject(projectId);
+  if (!project) return undefined;
 
   const startedAt = Date.now();
-  const runId = startFlowRun(flowId);
-  const done = executeRun(flow, runId, startedAt, options).finally(() => inFlight.delete(flowId));
-  inFlight.set(flowId, { runId, done });
+  const runId = startPrereqRun(projectId);
+  const done = executeRun(projectId, runId, startedAt, options).finally(() => inFlight.delete(projectId));
+  inFlight.set(projectId, { runId, done });
   return { runId, alreadyRunning: false };
 }
 
-/**
- * Run a flow and wait for it to finish. Existing blocking semantics —
- * kept for the scheduler tick and any callers that want the final result.
- */
-export function runFlow(flowId: string): Promise<FlowRun | undefined> {
-  const started = kickoffFlow(flowId);
+/** Blocking variant — used by the scheduler tick. */
+export function runPrereqChain(projectId: string): Promise<PrereqRun | undefined> {
+  const started = kickoffPrereqChain(projectId);
   if (!started) return Promise.resolve(undefined);
-  return inFlight.get(flowId)?.done ?? Promise.resolve(undefined);
+  return inFlight.get(projectId)?.done ?? Promise.resolve(undefined);
 }
 
 function emptyTimings(): Timings {

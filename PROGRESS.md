@@ -104,6 +104,42 @@
 - [x] **13.30** Fix: Flow KPI strip auto-updates after Run Now (no page refresh needed) — *2026-05-19*
 - [x] **5.9** Dynamic axis labels (hours/days/dates) based on selected window — *2026-05-12*
 
+## Phase 1.14 — Prerequisites (project-level setup chain) ✅ Complete
+
+- [x] **14.1** Backend: 4 new tables (prereq_steps / prereq_runs / prereq_step_results / project_variable_cache) + project columns — *2026-05-19*
+- [x] **14.2** Backend: store CRUD + run lifecycle + project-pool variable cache — *2026-05-19*
+- [x] **14.3** Backend: prereqRunner.ts (sequential exec, retries, wait, TTL, captures to project pool) — *2026-05-19*
+- [x] **14.4** Backend: monitor.ts substitutes project-pool `{{vars}}` into every standalone URL check — *2026-05-19*
+- [x] **14.5** Backend: flowRunner.ts merges project pool + flow cache (flow-scoped wins on conflict) — *2026-05-19*
+- [x] **14.6** Backend: monitor tick auto-runs due prereq chains (before URLs/flows) — *2026-05-19*
+- [x] **14.7** Backend: REST endpoints (CRUD prereq steps / run / list runs / get vars / clear vars) — *2026-05-19*
+- [x] **14.8** Frontend: PrereqsPanel — collapsible panel above tab nav with status header + Run Now — *2026-05-19*
+- [x] **14.9** Frontend: PrereqStepEditorForm (shares 7-tab UX with FlowStep editor) — *2026-05-19*
+- [x] **14.10** Frontend: Variables hint in Flow step editor now includes prereq-chain vars — *2026-05-19*
+- [x] **14.11** Frontend: live project variable list (with TTL countdown) + Clear vars button — *2026-05-19*
+- [x] **14.12** Frontend: per-project schedule controls (interval + enable/disable) — *2026-05-19*
+- [x] **14.13** Smoke test: prereq captures token → URL substitutes it → `body-contains` assertion passes — *2026-05-19*
+- [x] **14.14** Backend: `{{var}}` substitution inside assertion config (closes the brittleness gap) — *2026-05-19*
+- [x] **14.15** Backend: `evaluateAssertions(vars)` param + wired into monitor / flowRunner / prereqRunner — *2026-05-19*
+- [x] **14.16** Frontend: assertion UI hints `{{var}}` support (placeholder + tip line) — *2026-05-19*
+- [x] **14.17** Smoke test: prereq re-run after pool clear keeps flow green automatically (3 injection shapes) — *2026-05-19*
+- [x] **14.18** Backend: split runners — `kickoff*()` returns runId synchronously, `/run-async` returns 202, run completes in background — *2026-05-19*
+- [x] **14.19** Frontend: FlowCard + PrereqsPanel poll `/api/flow-runs/:id` and `/api/prereq-runs/:id` every 500ms; live per-step state — *2026-05-19*
+- [x] **14.20** UX: progress bar + "Step N of M running…" replaces opaque blocking spinner — *2026-05-19*
+- [x] **14.21** Backend: `force` flag bypasses smart TTL cache (`?force=true` on `/run-async`) — *2026-05-19*
+- [x] **14.22** Frontend: manual Run-now click always passes `force=true` (scheduler stays cache-aware) — *2026-05-19*
+- [x] **14.23** Smoke test: scheduler skips fresh / manual click rotates pool value — *2026-05-19*
+
+## Phase 1.15 — UX hardening (production polish) ✅ Complete
+
+- [x] **15.1** Active project persists across page refresh (localStorage) — *2026-05-19*
+- [x] **15.2** Per-project scroll memory: save on leave / restore on return / top on fresh — *2026-05-19*
+- [x] **15.3** Prereq panel auto-collapses 1.5s after run completes (restores pre-click state) — *2026-05-19*
+- [x] **15.4** Two-click inline confirm for step delete (replaces native `window.confirm`) — *2026-05-19*
+- [x] **15.5** Document title reflects active project + failing count — *2026-05-19*
+- [x] **15.6** Sidebar shows failing-count badge per project (pulsing red) — *2026-05-19*
+- [x] **15.7** Step rows truncate long URLs cleanly (ellipsis + monospace) — *2026-05-19*
+
 ## Phase 1.9 — Postman parity ✅ Complete
 
 - [x] **6.1** HTTP method support (GET / POST / PUT / PATCH; DELETE blocked) — *2026-05-11*
@@ -152,7 +188,17 @@
 - Built Run Audit button + HTML report generator + Slack Block Kit + file upload
 - Built audit progress + result modals
 
-### Today 2026-05-11 — Postman parity + Discoverability + new viz (14 items)
+### Today 2026-05-19 — Prerequisites: project-level auth chain (13 items)
+- New top-of-project panel: define a sequential login chain that captures tokens into a project variable pool
+- Every URL + every Flow step in the project can now reference captured vars as `{{name}}`
+- Hierarchical variable scoping: flow-scoped vars override project pool on name conflict
+- Per-project schedule + manual Run Now; chain auto-fires on tick before URL/flow checks
+- TTL-aware caching: skip the login step entirely if the token is still fresh
+- Live variable list with remaining-TTL countdowns; one-click "Clear captured vars"
+- Reuses entire flow-step editor UX (7 tabs) — no new editor concepts to learn
+- Smoke-tested end-to-end with httpbin: chain captures `auth_token`, URL injects it, assertion passes
+
+### Earlier 2026-05-11 — Postman parity + Discoverability + new viz (14 items)
 - Replaced 2 separate viz with unified **Activity Timeline** (proportional bars + tooltips)
 - Added Postman parity: HTTP methods, body editor (JSON/form/urlencoded), assertions engine
 - Added custom **Headers** + **Query Params** tabs to URL builder

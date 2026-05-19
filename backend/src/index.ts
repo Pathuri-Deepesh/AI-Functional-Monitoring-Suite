@@ -5,12 +5,15 @@ import { resolve } from "node:path";
 import {
   addApiKey,
   addFlowStep,
+  addPrereqStep,
   addUrl,
+  clearProjectVariableCache,
   clearVariableCache,
   createFlow,
   createProject,
   deleteFlow,
   deleteFlowStep,
+  deletePrereqStep,
   deleteProject,
   getCachedVariables,
   getFlow,
@@ -18,6 +21,7 @@ import {
   getFlowStats,
   getFlowStep,
   getFlowWithSteps,
+  getPrereqRun,
   getProject,
   getUrl,
   getUrlSparkline,
@@ -25,19 +29,25 @@ import {
   listChecksForUrl,
   listFlowRuns,
   listFlowsByProject,
+  listPrereqRuns,
+  listPrereqSteps,
+  listProjectVariables,
   listProjects,
   listUrlsByProject,
   removeApiKey,
   removeUrl,
   reorderFlowSteps,
+  reorderPrereqSteps,
   updateFlow,
   updateFlowStep,
+  updatePrereqStep,
   updateProject,
   updateUrl,
 } from "./store.js";
 import { checkOne, snapshot, startMonitorLoop } from "./monitor.js";
 import { runAuditAndDeliver } from "./audit.js";
-import { runFlow } from "./flowRunner.js";
+import { kickoffFlow, runFlow } from "./flowRunner.js";
+import { kickoffPrereqChain, runPrereqChain } from "./prereqRunner.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -348,6 +358,27 @@ app.post("/api/flows/:id/run", async (req, res) => {
   }
 });
 
+/**
+ * Kick off a flow and return the runId immediately (HTTP 202).
+ * The flow continues in the background; clients poll GET /api/flow-runs/:id
+ * for live step-by-step progress.
+ */
+app.post("/api/flows/:id/run-async", (req, res) => {
+  const flow = getFlow(req.params.id);
+  if (!flow) {
+    res.status(404).json({ error: "Flow not found" });
+    return;
+  }
+  // Manual UI clicks set ?force=true to bypass the TTL skip-cache.
+  const force = req.query.force === "true";
+  const started = kickoffFlow(flow.id, { force });
+  if (!started) {
+    res.status(409).json({ error: "Flow is disabled" });
+    return;
+  }
+  res.status(202).json(started);
+});
+
 app.get("/api/flows/:id/runs", (req, res) => {
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
   res.json(listFlowRuns(req.params.id, limit));
@@ -374,6 +405,125 @@ app.get("/api/flows/:id/cache", (req, res) => {
 
 app.delete("/api/flows/:id/cache", (req, res) => {
   clearVariableCache(req.params.id);
+  res.status(204).end();
+});
+
+// ---------- Prerequisites (project-level setup chain) ----------
+app.get("/api/projects/:projectId/prereqs", (req, res) => {
+  const project = getProject(req.params.projectId);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  res.json({
+    steps: listPrereqSteps(req.params.projectId),
+    intervalMinutes: project.prereqIntervalMinutes,
+    enabled: project.prereqEnabled,
+    lastRunAt: project.prereqLastRunAt,
+    lastRunOk: project.prereqLastRunOk,
+    lastRunTotalMs: project.prereqLastRunTotalMs,
+  });
+});
+
+app.post("/api/projects/:projectId/prereqs/steps", (req, res) => {
+  try {
+    const created = addPrereqStep({ projectId: req.params.projectId, ...(req.body ?? {}) });
+    res.status(201).json(created);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.patch("/api/prereq-steps/:id", (req, res) => {
+  try {
+    const updated = updatePrereqStep(req.params.id, req.body ?? {});
+    if (!updated) {
+      res.status(404).json({ error: "Prereq step not found" });
+      return;
+    }
+    res.json(updated);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.delete("/api/prereq-steps/:id", (req, res) => {
+  const ok = deletePrereqStep(req.params.id);
+  if (!ok) {
+    res.status(404).json({ error: "Prereq step not found" });
+    return;
+  }
+  res.status(204).end();
+});
+
+app.post("/api/projects/:projectId/prereqs/steps/reorder", (req, res) => {
+  const ids = req.body?.orderedIds;
+  if (!Array.isArray(ids)) {
+    res.status(400).json({ error: "orderedIds (string[]) is required" });
+    return;
+  }
+  reorderPrereqSteps(req.params.projectId, ids);
+  res.json({ ok: true });
+});
+
+app.post("/api/projects/:projectId/prereqs/run", async (req, res) => {
+  const project = getProject(req.params.projectId);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  try {
+    const result = await runPrereqChain(project.id);
+    res.json(result ?? null);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/** Kick off prereq chain, return runId immediately. Client polls GET /api/prereq-runs/:id. */
+app.post("/api/projects/:projectId/prereqs/run-async", (req, res) => {
+  const project = getProject(req.params.projectId);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  const force = req.query.force === "true";
+  const started = kickoffPrereqChain(project.id, { force });
+  if (!started) {
+    res.status(409).json({ error: "Unable to start prereq run" });
+    return;
+  }
+  res.status(202).json(started);
+});
+
+app.get("/api/projects/:projectId/prereqs/runs", (req, res) => {
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
+  res.json(listPrereqRuns(req.params.projectId, limit));
+});
+
+app.get("/api/prereq-runs/:id", (req, res) => {
+  const run = getPrereqRun(req.params.id);
+  if (!run) {
+    res.status(404).json({ error: "Prereq run not found" });
+    return;
+  }
+  res.json(run);
+});
+
+app.get("/api/projects/:projectId/variables", (req, res) => {
+  if (!getProject(req.params.projectId)) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  res.json(listProjectVariables(req.params.projectId));
+});
+
+app.delete("/api/projects/:projectId/variables", (req, res) => {
+  if (!getProject(req.params.projectId)) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  clearProjectVariableCache(req.params.projectId);
   res.status(204).end();
 });
 

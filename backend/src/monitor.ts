@@ -3,6 +3,7 @@ import { sendSlackAlert } from "./slack.js";
 import { evaluateAssertions } from "./assertions.js";
 import {
   getProject,
+  getProjectVariables,
   getUrl,
   listFlows,
   listProjects,
@@ -13,7 +14,9 @@ import {
 import { pruneOldChecks } from "./db.js";
 import { timedFetch } from "./timing.js";
 import { runFlow } from "./flowRunner.js";
-import type { FullSnapshot, MonitoredUrl, StatusGroup } from "./types.js";
+import { runPrereqChain } from "./prereqRunner.js";
+import { substitute } from "./extraction.js";
+import type { FullSnapshot, KeyValue, MonitoredUrl, StatusGroup } from "./types.js";
 
 const TICK_MS = 30_000;
 const PRUNE_MS = 60 * 60_000; // every hour
@@ -28,6 +31,10 @@ function classify(code: number): StatusGroup {
   return "error";
 }
 
+function substituteKv(items: KeyValue[], vars: Record<string, string>): KeyValue[] {
+  return items.map((it) => ({ key: it.key, value: substitute(it.value, vars) }));
+}
+
 async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   const url = getUrl(urlId);
   if (!url) return undefined;
@@ -39,15 +46,18 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   const auth = resolveApiKeyHeader(url);
   if (auth) headers[auth.name] = auth.value;
 
+  // Resolve {{vars}} from the project pool (captured by the prereq chain).
+  const projectVars = getProjectVariables(url.projectId);
+
   const result = await timedFetch({
-    url: url.url,
+    url: substitute(url.url, projectVars),
     method: url.method,
     bodyType: url.bodyType,
-    body: url.body,
+    body: substitute(url.body, projectVars),
     bodyContentType: url.bodyContentType,
     extraHeaders: headers,
-    customHeaders: url.customHeaders,
-    queryParams: url.queryParams,
+    customHeaders: substituteKv(url.customHeaders, projectVars),
+    queryParams: substituteKv(url.queryParams, projectVars),
   });
 
   const checkedAt = Date.now();
@@ -67,11 +77,15 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
     errorReason = isFailure ? reasonForStatus(code) : null;
   }
 
-  const assertionResults = evaluateAssertions(url.assertions, {
-    statusCode,
-    totalMs: result.timings.totalMs,
-    responseBody: result.responseBody,
-  });
+  const assertionResults = evaluateAssertions(
+    url.assertions,
+    {
+      statusCode,
+      totalMs: result.timings.totalMs,
+      responseBody: result.responseBody,
+    },
+    projectVars
+  );
   const allAssertionsPassed = assertionResults.every((r) => r.passed);
   const statusOk = statusGroup === "2xx" || statusGroup === "3xx";
   const ok = statusOk && allAssertionsPassed;
@@ -112,7 +126,19 @@ export function checkOne(urlId: string): Promise<MonitoredUrl | undefined> {
 export async function tick(): Promise<void> {
   const now = Date.now();
 
-  // 1) Due standalone URLs
+  // 1) Due prereq chains (run FIRST so URLs/flows have fresh tokens)
+  const duePrereqProjectIds: string[] = [];
+  for (const p of listProjects()) {
+    if (!p.prereqEnabled) continue;
+    const intervalMs = Math.max(60_000, p.prereqIntervalMinutes * 60_000);
+    const last = p.prereqLastRunAt ?? 0;
+    if (!last || now - last >= intervalMs) duePrereqProjectIds.push(p.id);
+  }
+  if (duePrereqProjectIds.length > 0) {
+    await Promise.all(duePrereqProjectIds.map((id) => runPrereqChain(id)));
+  }
+
+  // 2) Due standalone URLs
   const dueUrls: MonitoredUrl[] = [];
   for (const u of listUrls()) {
     const intervalMs = Math.max(60_000, u.intervalMinutes * 60_000);
@@ -120,7 +146,7 @@ export async function tick(): Promise<void> {
     if (!last || now - last >= intervalMs) dueUrls.push(u);
   }
 
-  // 2) Due flows (whole flow runs atomically when its interval has elapsed)
+  // 3) Due flows (whole flow runs atomically when its interval has elapsed)
   const dueFlowIds: string[] = [];
   for (const flow of listFlows()) {
     if (!flow.enabled) continue;

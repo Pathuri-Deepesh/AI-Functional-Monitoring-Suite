@@ -13,7 +13,11 @@ import type {
   HttpMethod,
   KeyValue,
   MonitoredUrl,
+  PrereqRun,
+  PrereqStep,
+  PrereqsBundle,
   Project,
+  ProjectVariable,
   SparklinePoint,
   UrlStats,
 } from "./types";
@@ -52,7 +56,18 @@ export async function createProject(input: {
 
 export async function updateProject(
   id: string,
-  patch: Partial<Pick<Project, "name" | "description" | "slackWebhookUrl" | "slackBotToken" | "slackChannel">>
+  patch: Partial<
+    Pick<
+      Project,
+      | "name"
+      | "description"
+      | "slackWebhookUrl"
+      | "slackBotToken"
+      | "slackChannel"
+      | "prereqIntervalMinutes"
+      | "prereqEnabled"
+    >
+  >
 ): Promise<Project> {
   return jsonOrThrow(
     await fetch(`${BASE}/projects/${id}`, {
@@ -268,6 +283,23 @@ export async function runFlowNow(id: string): Promise<FlowRun> {
   return jsonOrThrow(await fetch(`${BASE}/flows/${id}/run`, { method: "POST" }));
 }
 
+/**
+ * Kick off a flow run and return the runId immediately. Poll fetchFlowRun(runId) for progress.
+ * `force=true` bypasses the smart TTL skip-cache — set this for manual "Run now" clicks so the
+ * button always performs real work (scheduled runs should pass force=false to spare auth APIs).
+ */
+export async function runFlowAsync(
+  id: string,
+  opts: { force?: boolean } = {}
+): Promise<{ runId: string; alreadyRunning: boolean }> {
+  const qs = opts.force ? "?force=true" : "";
+  return jsonOrThrow(await fetch(`${BASE}/flows/${id}/run-async${qs}`, { method: "POST" }));
+}
+
+export async function fetchFlowRun(runId: string): Promise<FlowRun> {
+  return jsonOrThrow(await fetch(`${BASE}/flow-runs/${runId}`));
+}
+
 export async function listFlowRuns(id: string, limit = 30): Promise<FlowRun[]> {
   return jsonOrThrow(await fetch(`${BASE}/flows/${id}/runs?limit=${limit}`));
 }
@@ -278,4 +310,86 @@ export async function getCachedVariables(id: string): Promise<Record<string, str
 
 export async function clearFlowCache(id: string): Promise<void> {
   await jsonOrThrow(await fetch(`${BASE}/flows/${id}/cache`, { method: "DELETE" }));
+}
+
+// ---- Prerequisites ----
+export async function fetchPrereqs(projectId: string): Promise<PrereqsBundle> {
+  return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/prereqs`));
+}
+
+export async function addPrereqStep(
+  projectId: string,
+  input: {
+    url: string;
+    description?: string;
+    method?: HttpMethod;
+    bodyType?: BodyType;
+    body?: string;
+    bodyContentType?: string;
+    apiKeyId?: string | null;
+    assertions?: Assertion[];
+    customHeaders?: KeyValue[];
+    queryParams?: KeyValue[];
+    extractions?: Extraction[];
+    waitBeforeMs?: number;
+    maxRetries?: number;
+    retryBackoffMs?: number;
+  }
+): Promise<PrereqStep> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/prereqs/steps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    })
+  );
+}
+
+export async function updatePrereqStep(
+  id: string,
+  patch: Partial<PrereqStep>
+): Promise<PrereqStep> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/prereq-steps/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    })
+  );
+}
+
+export async function deletePrereqStep(id: string): Promise<void> {
+  await jsonOrThrow(await fetch(`${BASE}/prereq-steps/${id}`, { method: "DELETE" }));
+}
+
+export async function runPrereqsNow(projectId: string): Promise<PrereqRun> {
+  return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/prereqs/run`, { method: "POST" }));
+}
+
+export async function runPrereqsAsync(
+  projectId: string,
+  opts: { force?: boolean } = {}
+): Promise<{ runId: string; alreadyRunning: boolean }> {
+  const qs = opts.force ? "?force=true" : "";
+  return jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/prereqs/run-async${qs}`, { method: "POST" })
+  );
+}
+
+export async function fetchPrereqRun(runId: string): Promise<PrereqRun> {
+  return jsonOrThrow(await fetch(`${BASE}/prereq-runs/${runId}`));
+}
+
+export async function listPrereqRuns(projectId: string, limit = 30): Promise<PrereqRun[]> {
+  return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/prereqs/runs?limit=${limit}`));
+}
+
+export async function fetchProjectVariables(projectId: string): Promise<ProjectVariable[]> {
+  return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/variables`));
+}
+
+export async function clearProjectVariables(projectId: string): Promise<void> {
+  await jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/variables`, { method: "DELETE" })
+  );
 }
