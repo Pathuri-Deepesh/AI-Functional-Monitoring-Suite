@@ -34,6 +34,27 @@ interface InFlightRun {
 
 const inFlight = new Map<string, InFlightRun>();
 
+/**
+ * Live per-step progress while a run is mid-flight. Lets the frontend show
+ * "retry 2 of 4" or "waiting for retry…" instead of an opaque spinner during
+ * the gap between attempts. Cleared when the step (and run) finishes.
+ */
+export interface LiveStepProgress {
+  stepId: string;
+  position: number;
+  attempt: number;       // 1-indexed: 1 = first try, 2 = first retry, ...
+  maxAttempts: number;   // maxRetries + 1
+  lastStatusCode: number | null;
+  lastErrorReason: string | null;
+  phase: "executing" | "backoff";
+  nextRetryAtMs: number | null; // wall clock when the next attempt fires (during backoff)
+}
+const liveStepByRun = new Map<string, LiveStepProgress>();
+
+export function getLiveStepProgress(runId: string): LiveStepProgress | undefined {
+  return liveStepByRun.get(runId);
+}
+
 function classify(code: number): StatusGroup {
   if (code >= 200 && code < 300) return "2xx";
   if (code >= 300 && code < 400) return "3xx";
@@ -90,7 +111,8 @@ interface StepOutcome {
 
 async function executeStep(
   step: FlowStep,
-  vars: Record<string, string>
+  vars: Record<string, string>,
+  runId?: string
 ): Promise<StepOutcome> {
   // Note: `vars` is used both for header/body substitution above (via substituteStep)
   // and for resolving {{vars}} inside assertion config (e.g., body-contains).
@@ -105,12 +127,29 @@ async function executeStep(
     if (auth) headers[auth.name] = auth.value;
   }
 
+  const maxAttempts = step.maxRetries + 1;
   let attempt = 0;
   let backoff = step.retryBackoffMs;
   let outcome: StepOutcome | null = null;
+  let lastStatusCode: number | null = null;
+  let lastErrorReason: string | null = null;
 
   while (attempt <= step.maxRetries) {
     attempt++;
+    // Publish live progress so the frontend can show "▶ RUNNING" on attempt 1
+    // and "🔁 RETRY N/M" on subsequent attempts.
+    if (runId) {
+      liveStepByRun.set(runId, {
+        stepId: step.id,
+        position: step.position,
+        attempt,
+        maxAttempts,
+        lastStatusCode,
+        lastErrorReason,
+        phase: "executing",
+        nextRetryAtMs: null,
+      });
+    }
     const result = await timedFetch({
       url: step.url,
       method: step.method,
@@ -170,7 +209,23 @@ async function executeStep(
     };
 
     if (stepOk) break;
+    // Remember this attempt's failure signal so the next live update shows it
+    lastStatusCode = statusCode;
+    lastErrorReason = errorReason;
     if (attempt > step.maxRetries) break;
+    // Publish backoff phase — UI shows "Waiting 1.5s before retry…"
+    if (runId) {
+      liveStepByRun.set(runId, {
+        stepId: step.id,
+        position: step.position,
+        attempt,
+        maxAttempts,
+        lastStatusCode,
+        lastErrorReason,
+        phase: "backoff",
+        nextRetryAtMs: Date.now() + backoff,
+      });
+    }
     await sleep(backoff);
     backoff = Math.min(backoff * 2, 30_000);
   }
@@ -269,7 +324,7 @@ async function executeRun(
     // Substitute {{vars}} into this step's fields
     const resolved = substituteStep(step, variables);
 
-    const outcome = await executeStep(resolved, variables);
+    const outcome = await executeStep(resolved, variables, runId);
 
     // Stash extracted values into the running `variables` map AND cache them
     // with TTL if configured.
@@ -308,6 +363,8 @@ async function executeRun(
   const totalMs = Date.now() - startedAt;
   finishFlowRun({ id: runId, ok: allOk, failedAtStepId, variables, totalMs });
   markFlowRunCompletedAt(flow.id, startedAt);
+  // Tear down the live-progress slot — no more attempts coming for this run
+  liveStepByRun.delete(runId);
 
   // Slack alert on failure (won't double-send if same run is alerted from elsewhere)
   if (!allOk && project) {

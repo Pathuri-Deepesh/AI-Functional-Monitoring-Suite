@@ -139,6 +139,11 @@
 - [x] **15.5** Document title reflects active project + failing count — *2026-05-19*
 - [x] **15.6** Sidebar shows failing-count badge per project (pulsing red) — *2026-05-19*
 - [x] **15.7** Step rows truncate long URLs cleanly (ellipsis + monospace) — *2026-05-19*
+- [x] **15.8** Backend: in-memory `liveStep` map per runner; each retry attempt + backoff phase is published — *2026-05-20*
+- [x] **15.9** Backend: `GET /flow-runs/:id` and `/prereq-runs/:id` enrich response with optional `liveStep` while mid-flight — *2026-05-20*
+- [x] **15.10** Frontend: running step pill switches to amber `🔁 RETRY N/M` + row tints amber during retries — *2026-05-20*
+- [x] **15.11** Frontend: progress bar shows `retry N of M (waiting before next try…)` + last-try status code chip — *2026-05-20*
+- [x] **15.12** Smoke test: 503 endpoint with 3 retries — attempts 1→4 transitions including backoff phase all visible — *2026-05-20*
 
 ## Phase 1.9 — Postman parity ✅ Complete
 

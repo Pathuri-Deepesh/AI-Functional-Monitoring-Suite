@@ -9,6 +9,7 @@ import {
 } from "../api";
 import { Spinner } from "./Spinner";
 import type {
+  LiveStepProgress,
   PrereqRun,
   PrereqStep,
   PrereqsBundle,
@@ -179,8 +180,10 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
     : "FAILED";
 
   // Currently-executing step position while a chain is in flight
+  const live = activeRun?.liveStep ?? null;
   const runningStepPosition = (() => {
     if (!running || steps.length === 0) return null;
+    if (live) return live.position;
     const done = new Set((activeRun?.stepResults ?? []).map((r) => r.stepId));
     const sorted = [...steps].sort((a, b) => a.position - b.position);
     for (const s of sorted) if (!done.has(s.id)) return s.position;
@@ -188,6 +191,8 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
   })();
   const completedCount = activeRun?.stepResults.length ?? 0;
   const totalSteps = steps.length;
+  const isRetrying = !!live && live.attempt > 1;
+  const isBackoff = !!live && live.phase === "backoff";
 
   return (
     <section className={`prereq-panel border-${statusClass}`}>
@@ -237,7 +242,7 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
 
       {running && totalSteps > 0 && (
         <div
-          className="flow-progress"
+          className={`flow-progress ${isRetrying ? "retrying" : ""}`}
           aria-label={`Prereq chain running step ${runningStepPosition ?? "—"} of ${totalSteps}`}
         >
           <div
@@ -248,10 +253,26 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
             <Spinner size={11} />
             <span>
               {runningStepPosition != null
-                ? `Step ${runningStepPosition} of ${totalSteps} running…`
-                : `Wrapping up step ${totalSteps} of ${totalSteps}…`}
+                ? `Step ${runningStepPosition} of ${totalSteps}`
+                : `Wrapping up step ${totalSteps} of ${totalSteps}`}
+              {isRetrying && live ? (
+                <>
+                  {" — "}
+                  <strong>
+                    🔁 retry {live.attempt - 1} of {live.maxAttempts - 1}
+                  </strong>
+                  {isBackoff ? " (waiting before next try…)" : " in flight…"}
+                </>
+              ) : (
+                " running…"
+              )}
             </span>
             <span className="muted small">· {completedCount} done</span>
+            {isRetrying && live?.lastErrorReason && (
+              <span className="muted small" title={live.lastErrorReason}>
+                · last try: {live.lastStatusCode ?? "no response"}
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -314,6 +335,7 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
                       step={s}
                       result={result ?? null}
                       runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
+                      liveAttempt={isRunningStep ? live : null}
                       onClick={() => onEditStep(s, steps)}
                     />
                   );
@@ -355,14 +377,18 @@ function PrereqStepRow(props: {
   step: PrereqStep;
   result: StepResult | null;
   runState?: "idle" | "running" | "queued";
+  liveAttempt?: LiveStepProgress | null;
   onClick: () => void;
 }) {
-  const { step, result, runState = "idle", onClick } = props;
+  const { step, result, runState = "idle", liveAttempt, onClick } = props;
   const ok = result?.ok ?? null;
   const skipped = result?.skipped ?? false;
+  const isRetry = !!liveAttempt && liveAttempt.attempt > 1;
   const statusClass =
     runState === "running"
-      ? "running"
+      ? isRetry
+        ? "retry"
+        : "running"
       : runState === "queued"
       ? "queued"
       : skipped
@@ -374,7 +400,9 @@ function PrereqStepRow(props: {
       : "g-5xx";
   const pillText =
     runState === "running"
-      ? "▶ RUNNING"
+      ? isRetry && liveAttempt
+        ? `🔁 RETRY ${liveAttempt.attempt - 1}/${liveAttempt.maxAttempts - 1}`
+        : "▶ RUNNING"
       : runState === "queued"
       ? "QUEUED"
       : skipped
@@ -386,6 +414,7 @@ function PrereqStepRow(props: {
     "step-row",
     ok === false && !skipped ? "step-failed" : "",
     runState === "running" ? "step-running" : "",
+    runState === "running" && isRetry ? "step-retrying" : "",
     runState === "queued" ? "step-queued" : "",
   ]
     .filter(Boolean)
@@ -402,6 +431,17 @@ function PrereqStepRow(props: {
           </span>
         </div>
         {step.description && <div className="step-desc muted small">{step.description}</div>}
+        {runState === "running" && isRetry && liveAttempt?.lastErrorReason && (
+          <div className="step-result-meta">
+            <span className="meta-chip warn" title={liveAttempt.lastErrorReason}>
+              last try: {liveAttempt.lastStatusCode ?? "no response"} —{" "}
+              {liveAttempt.lastErrorReason.slice(0, 60)}
+            </span>
+            {liveAttempt.phase === "backoff" && (
+              <span className="meta-chip muted">⏳ waiting for next try…</span>
+            )}
+          </div>
+        )}
         {result && (
           <div className="step-result-meta">
             {result.timings.totalMs != null && (

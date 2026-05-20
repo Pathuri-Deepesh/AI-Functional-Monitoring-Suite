@@ -46,8 +46,12 @@ import {
 } from "./store.js";
 import { checkOne, snapshot, startMonitorLoop } from "./monitor.js";
 import { runAuditAndDeliver } from "./audit.js";
-import { kickoffFlow, runFlow } from "./flowRunner.js";
-import { kickoffPrereqChain, runPrereqChain } from "./prereqRunner.js";
+import { getLiveStepProgress as getLiveFlowStep, kickoffFlow, runFlow } from "./flowRunner.js";
+import {
+  getLiveStepProgress as getLivePrereqStep,
+  kickoffPrereqChain,
+  runPrereqChain,
+} from "./prereqRunner.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -390,7 +394,10 @@ app.get("/api/flow-runs/:id", (req, res) => {
     res.status(404).json({ error: "Flow run not found" });
     return;
   }
-  res.json(run);
+  // Enrich the response with live mid-flight progress (retry attempt, backoff
+  // status). Only present while the run is in-flight; null after completion.
+  const liveStep = run.endedAt == null ? getLiveFlowStep(run.id) ?? null : null;
+  res.json({ ...run, liveStep });
 });
 
 app.get("/api/flows/:id/stats", (req, res) => {
@@ -507,7 +514,8 @@ app.get("/api/prereq-runs/:id", (req, res) => {
     res.status(404).json({ error: "Prereq run not found" });
     return;
   }
-  res.json(run);
+  const liveStep = run.endedAt == null ? getLivePrereqStep(run.id) ?? null : null;
+  res.json({ ...run, liveStep });
 });
 
 app.get("/api/projects/:projectId/variables", (req, res) => {

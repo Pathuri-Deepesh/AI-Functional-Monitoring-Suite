@@ -31,6 +31,22 @@ interface InFlightPrereq {
 
 const inFlight = new Map<string, InFlightPrereq>();
 
+// Live per-step progress for mid-flight runs (see flowRunner for full docs)
+export interface LiveStepProgress {
+  stepId: string;
+  position: number;
+  attempt: number;
+  maxAttempts: number;
+  lastStatusCode: number | null;
+  lastErrorReason: string | null;
+  phase: "executing" | "backoff";
+  nextRetryAtMs: number | null;
+}
+const liveStepByRun = new Map<string, LiveStepProgress>();
+export function getLiveStepProgress(runId: string): LiveStepProgress | undefined {
+  return liveStepByRun.get(runId);
+}
+
 function classify(code: number): StatusGroup {
   if (code >= 200 && code < 300) return "2xx";
   if (code >= 300 && code < 400) return "3xx";
@@ -77,7 +93,8 @@ interface StepOutcome {
 
 async function executeStep(
   step: PrereqStep,
-  vars: Record<string, string>
+  vars: Record<string, string>,
+  runId?: string
 ): Promise<StepOutcome> {
   const headers: Record<string, string> = {};
   if (step.apiKeyId) {
@@ -89,12 +106,27 @@ async function executeStep(
     if (auth) headers[auth.name] = auth.value;
   }
 
+  const maxAttempts = step.maxRetries + 1;
   let attempt = 0;
   let backoff = step.retryBackoffMs;
   let outcome: StepOutcome | null = null;
+  let lastStatusCode: number | null = null;
+  let lastErrorReason: string | null = null;
 
   while (attempt <= step.maxRetries) {
     attempt++;
+    if (runId) {
+      liveStepByRun.set(runId, {
+        stepId: step.id,
+        position: step.position,
+        attempt,
+        maxAttempts,
+        lastStatusCode,
+        lastErrorReason,
+        phase: "executing",
+        nextRetryAtMs: null,
+      });
+    }
     const result = await timedFetch({
       url: step.url,
       method: step.method,
@@ -154,7 +186,21 @@ async function executeStep(
     };
 
     if (stepOk) break;
+    lastStatusCode = statusCode;
+    lastErrorReason = errorReason;
     if (attempt > step.maxRetries) break;
+    if (runId) {
+      liveStepByRun.set(runId, {
+        stepId: step.id,
+        position: step.position,
+        attempt,
+        maxAttempts,
+        lastStatusCode,
+        lastErrorReason,
+        phase: "backoff",
+        nextRetryAtMs: Date.now() + backoff,
+      });
+    }
     await sleep(backoff);
     backoff = Math.min(backoff * 2, 30_000);
   }
@@ -235,7 +281,7 @@ async function executeRun(
     }
 
     const resolved = substituteStep(step, variables);
-    const outcome = await executeStep(resolved, variables);
+    const outcome = await executeStep(resolved, variables, runId);
 
     // Stash into the in-run variables map and persist to the project pool with TTL.
     for (const ev of outcome.extractedValues) {
@@ -273,6 +319,7 @@ async function executeRun(
   const totalMs = Date.now() - startedAt;
   finishPrereqRun({ id: runId, ok: allOk, failedAtStepId, variables, totalMs });
   markPrereqRunCompletedAt(projectId, startedAt);
+  liveStepByRun.delete(runId);
 
   return getPrereqRun(runId);
 }

@@ -129,3 +129,8 @@
 15.5,Phase 1.15 - UX hardening,Document title reflects active project + failing count,Done,2026-05-19,Tab title now '(3 failing) Project Name - Functional Monitor'
 15.6,Phase 1.15 - UX hardening,Sidebar shows failing-count badge per project (pulsing red),Done,2026-05-19,Spot failing projects at a glance without clicking each one
 15.7,Phase 1.15 - UX hardening,Step rows truncate long URLs cleanly (ellipsis + monospace),Done,2026-05-19,Prevents long URLs from pushing the edit hint off the card
+15.8,Phase 1.15 - UX hardening,Backend: liveStep map in flowRunner + prereqRunner; each retry attempt + backoff phase is published in-memory,Done,2026-05-20,Enables live retry visibility without DB writes per attempt
+15.9,Phase 1.15 - UX hardening,Backend: GET /flow-runs/:id and /prereq-runs/:id enrich response with optional liveStep while run is mid-flight,Done,2026-05-20,Single endpoint - existing poll cadence picks it up
+15.10,Phase 1.15 - UX hardening,Frontend: running step pill switches to amber "RETRY N/M" + step row tints amber during retries,Done,2026-05-20,Distinguishes a retry-in-progress from a fresh attempt
+15.11,Phase 1.15 - UX hardening,Frontend: progress bar shows "retry N of M (waiting before next try)" + last-try status code chip,Done,2026-05-20,No more silent waits during exponential backoff
+15.12,Phase 1.15 - UX hardening,Smoke test: 503 endpoint with 3 retries traces attempt 1 to 4 transitions including backoff phase,Done,2026-05-20,Verified via /api/flow-runs/:id polling at 350ms cadence
