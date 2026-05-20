@@ -205,6 +205,22 @@ export interface StepResult {
   checkedAt: number;
 }
 
+/**
+ * Mid-flight progress for the step currently executing in a run. Only present
+ * on FlowRun / PrereqRun responses while `endedAt == null`. Lets the UI show
+ * "🔁 Retry 2 of 4 — waiting 1.5s…" instead of an opaque spinner during backoff.
+ */
+export interface LiveStepProgress {
+  stepId: string;
+  position: number;
+  attempt: number;       // 1-indexed: 1 = first try, 2 = first retry, …
+  maxAttempts: number;   // maxRetries + 1
+  lastStatusCode: number | null;
+  lastErrorReason: string | null;
+  phase: "executing" | "backoff";
+  nextRetryAtMs: number | null;
+}
+
 export interface FlowRun {
   id: string;
   flowId: string;
@@ -215,6 +231,8 @@ export interface FlowRun {
   totalMs: number | null;
   variables: Record<string, string>;
   stepResults: StepResult[];
+  /** Present only while a run is in-flight. */
+  liveStep?: LiveStepProgress | null;
 }
 
 // ===== Prerequisites (project-level setup chain) =====
@@ -258,6 +276,8 @@ export interface PrereqRun {
   totalMs: number | null;
   variables: Record<string, string>;
   stepResults: StepResult[];
+  /** Present only while a run is in-flight. */
+  liveStep?: LiveStepProgress | null;
 }
 
 export interface ProjectVariable {

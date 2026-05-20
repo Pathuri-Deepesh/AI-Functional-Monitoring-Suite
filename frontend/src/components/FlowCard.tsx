@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchFlow, fetchFlowRun, listFlowRuns, runFlowAsync } from "../api";
 import { Spinner } from "./Spinner";
-import type { Flow, FlowRun, FlowWithSteps, StatusGroup, StepResult } from "../types";
+import type { Flow, FlowRun, FlowWithSteps, LiveStepProgress, StatusGroup, StepResult } from "../types";
 
 const GROUP_COLOR: Record<StatusGroup, string> = {
   "2xx": "g-2xx",
@@ -118,10 +118,12 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     ? "OK"
     : "FAILED";
 
-  // Find the step currently executing — the lowest-position step the runner
-  // hasn't written a result for yet, while a run is active.
+  // Prefer the backend's live signal — it knows the exact step + attempt count.
+  // Fall back to inferring from completed-results when liveStep isn't published yet.
+  const live = activeRun?.liveStep ?? null;
   const runningStepPosition = (() => {
     if (!running || !detail) return null;
+    if (live) return live.position;
     const done = new Set((activeRun?.stepResults ?? []).map((r) => r.stepId));
     const sorted = [...detail.steps].sort((a, b) => a.position - b.position);
     for (const s of sorted) if (!done.has(s.id)) return s.position;
@@ -129,6 +131,8 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
   })();
   const completedCount = activeRun?.stepResults.length ?? 0;
   const totalSteps = detail?.steps.length ?? 0;
+  const isRetrying = !!live && live.attempt > 1;
+  const isBackoff = !!live && live.phase === "backoff";
 
   return (
     <div className={`flow-card border-${statusClass}`}>
@@ -171,7 +175,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
 
       {running && totalSteps > 0 && (
         <div
-          className="flow-progress"
+          className={`flow-progress ${isRetrying ? "retrying" : ""}`}
           aria-label={`Running step ${runningStepPosition ?? "—"} of ${totalSteps}`}
         >
           <div
@@ -182,12 +186,26 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
             <Spinner size={11} />
             <span>
               {runningStepPosition != null
-                ? `Step ${runningStepPosition} of ${totalSteps} running…`
-                : `Wrapping up step ${totalSteps} of ${totalSteps}…`}
+                ? `Step ${runningStepPosition} of ${totalSteps}`
+                : `Wrapping up step ${totalSteps} of ${totalSteps}`}
+              {isRetrying && live ? (
+                <>
+                  {" — "}
+                  <strong>
+                    🔁 retry {live.attempt - 1} of {live.maxAttempts - 1}
+                  </strong>
+                  {isBackoff ? " (waiting before next try…)" : " in flight…"}
+                </>
+              ) : (
+                " running…"
+              )}
             </span>
-            <span className="muted small">
-              · {completedCount} done
-            </span>
+            <span className="muted small">· {completedCount} done</span>
+            {isRetrying && live?.lastErrorReason && (
+              <span className="muted small" title={live.lastErrorReason}>
+                · last try: {live.lastStatusCode ?? "no response"}
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -220,6 +238,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
                       extractions={step.extractions.map((e) => e.saveAs).filter(Boolean)}
                       result={result ?? null}
                       runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
+                      liveAttempt={isRunningStep ? live : null}
                       onClick={() => onEditStep(step.id)}
                     />
                   );
@@ -249,14 +268,18 @@ function StepRow(props: {
   extractions: string[];
   result: StepResult | null;
   runState?: "idle" | "running" | "queued";
+  liveAttempt?: LiveStepProgress | null;
   onClick: () => void;
 }) {
-  const { position, method, url, description, extractions, result, runState = "idle", onClick } = props;
+  const { position, method, url, description, extractions, result, runState = "idle", liveAttempt, onClick } = props;
   const ok = result?.ok ?? null;
   const skipped = result?.skipped ?? false;
+  const isRetry = !!liveAttempt && liveAttempt.attempt > 1;
   const statusClass =
     runState === "running"
-      ? "running"
+      ? isRetry
+        ? "retry"
+        : "running"
       : runState === "queued"
       ? "queued"
       : skipped
@@ -268,7 +291,9 @@ function StepRow(props: {
       : "g-5xx";
   const pillText =
     runState === "running"
-      ? "▶ RUNNING"
+      ? isRetry && liveAttempt
+        ? `🔁 RETRY ${liveAttempt.attempt - 1}/${liveAttempt.maxAttempts - 1}`
+        : "▶ RUNNING"
       : runState === "queued"
       ? "QUEUED"
       : skipped
@@ -280,6 +305,7 @@ function StepRow(props: {
     "step-row",
     ok === false && !skipped ? "step-failed" : "",
     runState === "running" ? "step-running" : "",
+    runState === "running" && isRetry ? "step-retrying" : "",
     runState === "queued" ? "step-queued" : "",
   ]
     .filter(Boolean)
@@ -296,6 +322,18 @@ function StepRow(props: {
           </span>
         </div>
         {description && <div className="step-desc muted small">{description}</div>}
+        {/* While retrying: surface why the previous attempt failed */}
+        {runState === "running" && isRetry && liveAttempt?.lastErrorReason && (
+          <div className="step-result-meta">
+            <span className="meta-chip warn" title={liveAttempt.lastErrorReason}>
+              last try: {liveAttempt.lastStatusCode ?? "no response"} —{" "}
+              {liveAttempt.lastErrorReason.slice(0, 60)}
+            </span>
+            {liveAttempt.phase === "backoff" && (
+              <span className="meta-chip muted">⏳ waiting for next try…</span>
+            )}
+          </div>
+        )}
         {result && (
           <div className="step-result-meta">
             {result.timings.totalMs != null && (
