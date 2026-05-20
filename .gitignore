@@ -44,3 +44,9 @@ desktop.ini
 
 # Claude Code local cache (keep .mcp.json — project-level config)
 .claude/cache/
+
+# SQLite databases — never commit (contain API keys, captured tokens, churn every check)
+backend/data/db.sqlite
+backend/data/*.sqlite
+backend/data/*.sqlite-shm
+backend/data/*.sqlite-wal
