@@ -9,6 +9,7 @@ import {
   updateFlowStep,
   updatePrereqStep,
 } from "../api";
+import { BinaryBodyEditor } from "./BinaryBodyEditor";
 import type {
   Assertion,
   AssertionType,
@@ -37,6 +38,7 @@ const BODY_TYPES: { value: BodyType; label: string; hint: string }[] = [
   { value: "raw", label: "Raw", hint: "Plain text with custom Content-Type" },
   { value: "urlencoded", label: "x-www-form-urlencoded", hint: "key=value&foo=bar" },
   { value: "form", label: "Form-data", hint: "JSON list: [{key, value}]" },
+  { value: "binary", label: "Binary", hint: "Upload a file (image, PDF, etc.)" },
 ];
 
 const RAW_CONTENT_TYPE_PRESETS: { value: string; label: string }[] = [
@@ -343,6 +345,7 @@ export function StepEditorForm(
           setBody={setBody}
           bodyContentType={bodyContentType}
           setBodyContentType={setBodyContentType}
+          projectId={project.id}
         />
       )}
       {tab === "body" && !bodyAllowed && (
@@ -596,8 +599,9 @@ function BodyEditor(props: {
   setBody: (b: string) => void;
   bodyContentType: string;
   setBodyContentType: (c: string) => void;
+  projectId: string;
 }) {
-  const { bodyType, setBodyType, body, setBody, bodyContentType, setBodyContentType } = props;
+  const { bodyType, setBodyType, body, setBody, bodyContentType, setBodyContentType, projectId } = props;
   const isPreset = RAW_CONTENT_TYPE_PRESETS.some((p) => p.value && p.value === bodyContentType);
   return (
     <>
@@ -663,6 +667,9 @@ function BodyEditor(props: {
         <Field label="Form fields (JSON array)" hint='[{"key":"name","value":"x"}]'>
           <textarea className="code-input" spellCheck={false} value={body} onChange={(e) => setBody(e.target.value)} rows={5} />
         </Field>
+      )}
+      {bodyType === "binary" && (
+        <BinaryBodyEditor body={body} setBody={setBody} projectId={projectId} />
       )}
       {bodyType === "none" && <div className="empty-inline">No body will be sent.</div>}
     </>
@@ -868,6 +875,7 @@ export function PrereqStepEditorForm(
           setBody={setBody}
           bodyContentType={bodyContentType}
           setBodyContentType={setBodyContentType}
+          projectId={project.id}
         />
       )}
       {tab === "body" && !bodyAllowed && (

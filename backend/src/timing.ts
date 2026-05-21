@@ -1,6 +1,10 @@
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
-import type { BodyType, HttpMethod, KeyValue, Timings } from "./types.js";
+import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { getUpload } from "./store.js";
+import { uploadPath } from "./paths.js";
+import type { BinaryBodyConfig, BodyType, HttpMethod, KeyValue, Timings } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_BODY_BYTES = 256 * 1024; // capture up to 256KB of response body for assertions
@@ -190,9 +194,58 @@ function buildBody(spec: RequestSpec): { bodyBuffer: Buffer | null; contentType:
         bodyBuffer: Buffer.from(spec.body, "utf8"),
         contentType: spec.bodyContentType?.trim() || "text/plain",
       };
+    case "binary":
+      return buildBinaryBody(spec.body);
     default:
       return { bodyBuffer: null, contentType: null };
   }
+}
+
+/**
+ * `spec.body` for binary is a JSON blob: `{ uploadId, fieldName? }`.
+ * - fieldName empty/missing → raw bytes with file's stored MIME type
+ * - fieldName set → multipart/form-data with that one field
+ */
+function buildBinaryBody(rawBody: string): {
+  bodyBuffer: Buffer | null;
+  contentType: string | null;
+} {
+  let cfg: BinaryBodyConfig;
+  try {
+    cfg = JSON.parse(rawBody) as BinaryBodyConfig;
+  } catch {
+    return { bodyBuffer: null, contentType: null };
+  }
+  if (!cfg.uploadId) return { bodyBuffer: null, contentType: null };
+
+  const upload = getUpload(cfg.uploadId);
+  if (!upload) return { bodyBuffer: null, contentType: null };
+
+  let fileBytes: Buffer;
+  try {
+    fileBytes = readFileSync(uploadPath(upload.id));
+  } catch {
+    return { bodyBuffer: null, contentType: null };
+  }
+
+  const fieldName = cfg.fieldName?.trim();
+  if (!fieldName) {
+    return { bodyBuffer: fileBytes, contentType: upload.mimeType || "application/octet-stream" };
+  }
+
+  // multipart/form-data with a single file field
+  const boundary = `----monitoringboundary${randomBytes(12).toString("hex")}`;
+  const head = Buffer.from(
+    `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${fieldName}"; filename="${upload.filename.replace(/"/g, "")}"\r\n` +
+      `Content-Type: ${upload.mimeType || "application/octet-stream"}\r\n\r\n`,
+    "utf8"
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
+  return {
+    bodyBuffer: Buffer.concat([head, fileBytes, tail]),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
 }
 
 function emptyTimings(): Timings {

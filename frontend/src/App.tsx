@@ -547,7 +547,7 @@ export default function App() {
 
       <Modal
         open={modal.kind === "audit-running"}
-        title="Running audit…"
+        title="Generating report…"
         onClose={() => {
           /* intentionally not closable */
         }}
@@ -555,9 +555,9 @@ export default function App() {
         <div className="audit-progress">
           <Spinner size={36} inline={false} />
           <p>
-            Re-checking every URL in <strong>{modal.kind === "audit-running" ? modal.projectName : ""}</strong>…
+            Snapshotting current state of <strong>{modal.kind === "audit-running" ? modal.projectName : ""}</strong>…
           </p>
-          <p className="muted small">This may take up to a minute depending on URL count.</p>
+          <p className="muted small">Uses the latest known status of every URL and flow — no fresh checks.</p>
         </div>
       </Modal>
 

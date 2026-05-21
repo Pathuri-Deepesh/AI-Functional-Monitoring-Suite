@@ -26,6 +26,9 @@ backend/data/*.tmp
 # Generated audit reports (regenerated on demand)
 backend/data/reports/*.html
 
+# User-uploaded binary files (per-project, never commit)
+backend/data/uploads/
+
 # Legacy migration backups
 backend/data/*.bak
 backend/data/*.migrated.bak

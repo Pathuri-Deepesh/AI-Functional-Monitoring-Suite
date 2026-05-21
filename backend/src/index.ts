@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, createReadStream, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   addApiKey,
@@ -11,10 +11,12 @@ import {
   clearVariableCache,
   createFlow,
   createProject,
+  createUpload,
   deleteFlow,
   deleteFlowStep,
   deletePrereqStep,
   deleteProject,
+  deleteUpload,
   getCachedVariables,
   getFlow,
   getFlowRun,
@@ -23,6 +25,7 @@ import {
   getFlowWithSteps,
   getPrereqRun,
   getProject,
+  getUpload,
   getUrl,
   getUrlSparkline,
   getUrlStats,
@@ -33,6 +36,7 @@ import {
   listPrereqSteps,
   listProjectVariables,
   listProjects,
+  listUploadsByProject,
   listUrlsByProject,
   removeApiKey,
   removeUrl,
@@ -44,6 +48,7 @@ import {
   updateProject,
   updateUrl,
 } from "./store.js";
+import { uploadPath } from "./paths.js";
 import { checkOne, snapshot, startMonitorLoop } from "./monitor.js";
 import { runAuditAndDeliver } from "./audit.js";
 import { getLiveStepProgress as getLiveFlowStep, kickoffFlow, runFlow } from "./flowRunner.js";
@@ -228,15 +233,18 @@ app.get("/api/urls/:id/sparkline", (req, res) => {
   res.json(getUrlSparkline(req.params.id, windowMinutes, buckets));
 });
 
-// ---------- Audit ("Check All") ----------
+// ---------- Audit ----------
+// Default = snapshot the current state into a report (fast).
+// Pass ?refresh=true to re-check every URL + re-run every flow first.
 app.post("/api/projects/:id/audit", async (req, res) => {
   const project = getProject(req.params.id);
   if (!project) {
     res.status(404).json({ error: "Project not found" });
     return;
   }
+  const refresh = req.query.refresh === "true";
   try {
-    const result = await runAuditAndDeliver(project.id, REPORTS_DIR);
+    const result = await runAuditAndDeliver(project.id, REPORTS_DIR, undefined, { refresh });
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
@@ -532,6 +540,87 @@ app.delete("/api/projects/:projectId/variables", (req, res) => {
     return;
   }
   clearProjectVariableCache(req.params.projectId);
+  res.status(204).end();
+});
+
+// ---------- Uploads (binary file storage for bodyType="binary") ----------
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10MB
+
+app.get("/api/projects/:projectId/uploads", (req, res) => {
+  if (!getProject(req.params.projectId)) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  res.json(listUploadsByProject(req.params.projectId));
+});
+
+app.post(
+  "/api/projects/:projectId/uploads",
+  express.raw({ type: "*/*", limit: MAX_UPLOAD_BYTES }),
+  (req, res) => {
+    if (!getProject(req.params.projectId)) {
+      res.status(404).json({ error: "Project not found" });
+      return;
+    }
+    const buf = req.body as Buffer;
+    if (!Buffer.isBuffer(buf) || buf.length === 0) {
+      res.status(400).json({ error: "Empty body — POST raw file bytes" });
+      return;
+    }
+    const rawFilename = String(req.header("x-filename") || "upload").trim();
+    let filename = rawFilename;
+    try {
+      filename = decodeURIComponent(rawFilename);
+    } catch {
+      // not URL-encoded — use raw
+    }
+    const mimeType = String(req.header("content-type") || "application/octet-stream");
+    try {
+      const upload = createUpload({
+        projectId: req.params.projectId,
+        filename,
+        mimeType,
+        sizeBytes: buf.length,
+      });
+      writeFileSync(uploadPath(upload.id), buf);
+      res.status(201).json(upload);
+    } catch (e) {
+      res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+);
+
+app.get("/api/uploads/:id", (req, res) => {
+  const upload = getUpload(req.params.id);
+  if (!upload) {
+    res.status(404).json({ error: "Upload not found" });
+    return;
+  }
+  const path = uploadPath(upload.id);
+  try {
+    statSync(path);
+  } catch {
+    res.status(404).json({ error: "Upload file missing on disk" });
+    return;
+  }
+  res.setHeader("content-type", upload.mimeType);
+  res.setHeader("content-length", String(upload.sizeBytes));
+  res.setHeader("content-disposition", `inline; filename="${upload.filename.replace(/"/g, "")}"`);
+  createReadStream(path).pipe(res);
+});
+
+app.delete("/api/uploads/:id", (req, res) => {
+  const upload = getUpload(req.params.id);
+  if (!upload) {
+    res.status(404).json({ error: "Upload not found" });
+    return;
+  }
+  deleteUpload(upload.id);
+  try {
+    unlinkSync(uploadPath(upload.id));
+  } catch {
+    // file already gone — ignore
+  }
   res.status(204).end();
 });
 

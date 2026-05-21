@@ -19,6 +19,7 @@ import type {
   Project,
   ProjectVariable,
   SparklinePoint,
+  Upload,
   UrlStats,
 } from "./types";
 
@@ -392,4 +393,49 @@ export async function clearProjectVariables(projectId: string): Promise<void> {
   await jsonOrThrow(
     await fetch(`${BASE}/projects/${projectId}/variables`, { method: "DELETE" })
   );
+}
+
+// ---- Uploads (binary file storage for bodyType="binary") ----
+export async function listUploads(projectId: string): Promise<Upload[]> {
+  return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/uploads`));
+}
+
+export function uploadFile(
+  projectId: string,
+  file: File,
+  onProgress?: (pct: number) => void,
+): Promise<Upload> {
+  // XHR (not fetch) so we can stream upload-progress events back to the UI.
+  // Filename goes URL-encoded so non-ASCII names survive HTTP header transport.
+  return new Promise<Upload>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${BASE}/projects/${projectId}/uploads`);
+    xhr.setRequestHeader("content-type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("x-filename", encodeURIComponent(file.name));
+    if (onProgress) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText) as Upload); }
+        catch { reject(new Error("Invalid server response")); }
+      } else {
+        let msg = `status ${xhr.status}`;
+        try { msg = JSON.parse(xhr.responseText).error || msg; } catch {}
+        reject(new Error(msg));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.send(file);
+  });
+}
+
+export async function deleteUpload(id: string): Promise<void> {
+  await jsonOrThrow(await fetch(`${BASE}/uploads/${id}`, { method: "DELETE" }));
+}
+
+export function uploadUrl(id: string): string {
+  return `${BASE}/uploads/${id}`;
 }
