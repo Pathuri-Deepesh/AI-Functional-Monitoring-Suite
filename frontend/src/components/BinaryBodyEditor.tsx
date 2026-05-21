@@ -22,6 +22,9 @@ export function BinaryBodyEditor(props: {
   const [progress, setProgress] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showLibrary, setShowLibrary] = useState(false);
+  /** id of the upload currently in "click again to confirm" state; null = nothing armed. */
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const confirmTimer = useRef<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const cfg = parseCfg(body);
@@ -83,8 +86,25 @@ export function BinaryBodyEditor(props: {
     if (file) void handleFile(file);
   }
 
-  async function deleteFile(id: string, filename: string) {
-    if (!confirm(`Delete "${filename}" from this project's uploads?`)) return;
+  /**
+   * Two-click confirm: first click arms (sets confirmingId + 4s timeout),
+   * second click on the same id actually deletes. Click on a different id
+   * resets the arming to that id.
+   */
+  function requestDelete(id: string) {
+    if (confirmingId !== id) {
+      setConfirmingId(id);
+      if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
+      confirmTimer.current = window.setTimeout(() => setConfirmingId(null), 4000);
+      return;
+    }
+    if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
+    confirmTimer.current = null;
+    setConfirmingId(null);
+    void deleteFile(id);
+  }
+
+  async function deleteFile(id: string) {
     try {
       await deleteUpload(id);
       setUploads((prev) => prev.filter((p) => p.id !== id));
@@ -93,6 +113,11 @@ export function BinaryBodyEditor(props: {
       setErr(e instanceof Error ? e.message : "Delete failed");
     }
   }
+
+  // Cancel any pending confirm timer on unmount
+  useEffect(() => () => {
+    if (confirmTimer.current) window.clearTimeout(confirmTimer.current);
+  }, []);
 
   return (
     <div className="pm-binary">
@@ -124,11 +149,15 @@ export function BinaryBodyEditor(props: {
               <span className="muted small">· {humanSize(selected.sizeBytes)}</span>
               <button
                 type="button"
-                className="pm-clear-btn"
-                onClick={() => deleteFile(selected.id, selected.filename)}
-                title="Delete this file from the project"
+                className={`pm-clear-btn ${confirmingId === selected.id ? "confirming" : ""}`}
+                onClick={() => requestDelete(selected.id)}
+                title={
+                  confirmingId === selected.id
+                    ? "Click again to confirm delete"
+                    : "Delete this file from the project"
+                }
               >
-                ×
+                {confirmingId === selected.id ? "Click to confirm" : "×"}
               </button>
             </>
           ) : (
@@ -207,11 +236,15 @@ export function BinaryBodyEditor(props: {
                     {isActive && <span className="pm-library-check" title="In use">✓</span>}
                     <button
                       type="button"
-                      className="pm-library-del"
-                      onClick={() => deleteFile(u.id, u.filename)}
-                      title="Delete from project"
+                      className={`pm-library-del ${confirmingId === u.id ? "confirming" : ""}`}
+                      onClick={() => requestDelete(u.id)}
+                      title={
+                        confirmingId === u.id
+                          ? "Click again to confirm delete"
+                          : "Delete from project"
+                      }
                     >
-                      🗑
+                      {confirmingId === u.id ? "Confirm?" : "🗑"}
                     </button>
                   </div>
                 );

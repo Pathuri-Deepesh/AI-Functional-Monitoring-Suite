@@ -2838,17 +2838,28 @@ textarea:focus-visible {
 }
 .pm-clear-btn {
   background: none;
-  border: none;
+  border: 1px solid transparent;
   color: var(--muted);
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
-  padding: 0 4px;
+  padding: 2px 6px;
   margin-left: 4px;
+  border-radius: var(--r-sm);
   font-family: inherit;
+  transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
 }
 .pm-clear-btn:hover {
   color: var(--g-5xx);
+}
+.pm-clear-btn.confirming,
+.pm-clear-btn.confirming:hover {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  background: rgba(239, 68, 68, 0.15);
+  border-color: var(--g-5xx);
+  color: var(--g-5xx);
+  animation: confirm-bump 1.5s ease-in-out infinite;
 }
 
 /* Inline progress bar shown directly under the row while uploading */
@@ -2971,13 +2982,14 @@ textarea:focus-visible {
 }
 .pm-library-del {
   background: none;
-  border: none;
+  border: 1px solid transparent;
   color: var(--muted);
   cursor: pointer;
   font-size: 13px;
-  padding: 2px 4px;
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
   opacity: 0;
-  transition: opacity var(--t-fast), color var(--t-fast);
+  transition: opacity var(--t-fast), color var(--t-fast), background var(--t-fast), border-color var(--t-fast);
   font-family: inherit;
 }
 .pm-library-row:hover .pm-library-del {
@@ -2985,4 +2997,14 @@ textarea:focus-visible {
 }
 .pm-library-del:hover {
   color: var(--g-5xx);
+}
+.pm-library-del.confirming,
+.pm-library-del.confirming:hover {
+  opacity: 1;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(239, 68, 68, 0.15);
+  border-color: var(--g-5xx);
+  color: var(--g-5xx);
+  animation: confirm-bump 1.5s ease-in-out infinite;
 }
