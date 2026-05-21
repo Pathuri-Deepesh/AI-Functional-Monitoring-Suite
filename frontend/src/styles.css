@@ -2784,274 +2784,102 @@ textarea:focus-visible {
 }
 
 /* ============================================================
-   Binary body editor (file upload picker)
+   Binary body editor — Postman-style
    ============================================================ */
-.bin-editor {
+.pm-binary {
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
 }
 
-/* ---- Empty-state dropzone ---- */
-.bin-dropzone {
+/* The "Select File" row — matches Postman's binary tab layout */
+.pm-binary-row {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: var(--s-6) var(--s-4);
-  border: 2px dashed var(--border-strong);
-  border-radius: var(--r-lg);
-  background: var(--panel-2);
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+.pm-select-btn {
+  background: var(--panel-3);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  font-family: inherit;
+  font-size: var(--text-sm);
   cursor: pointer;
-  text-align: center;
-  transition: border-color var(--t-fast), background var(--t-fast), transform var(--t-fast);
-  outline: none;
+  white-space: nowrap;
+  transition: background var(--t-fast), border-color var(--t-fast);
 }
-.bin-dropzone:hover,
-.bin-dropzone:focus-visible {
+.pm-select-btn:hover:not(:disabled) {
+  background: var(--accent);
   border-color: var(--accent);
-  background: var(--accent-soft);
+  color: white;
 }
-.bin-dropzone.drag-over {
-  border-color: var(--accent-2);
-  background: var(--accent-soft);
-  transform: scale(1.01);
+.pm-select-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
-.bin-dropzone-icon {
-  font-size: 36px;
-  line-height: 1;
-  margin-bottom: 2px;
-  opacity: 0.85;
-}
-.bin-dropzone-title {
-  font-weight: 600;
-  color: var(--text-strong);
-  font-size: var(--text-md);
-}
-.bin-dropzone-sub {
-  color: var(--muted);
+.pm-file-display {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
   font-size: var(--text-sm);
 }
-
-/* ---- Upload progress ---- */
-.bin-uploading {
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  padding: var(--s-3) var(--s-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-.bin-uploading-head {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
+.pm-file-name {
   color: var(--text-strong);
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
-.bin-uploading-head .bin-uploading-icon {
-  color: var(--accent-2);
-  animation: bin-uploading-bob 1.2s ease-in-out infinite;
-  display: inline-block;
+.pm-clear-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  margin-left: 4px;
+  font-family: inherit;
 }
-.bin-uploading-head .muted {
-  margin-left: auto;
+.pm-clear-btn:hover {
+  color: var(--g-5xx);
 }
-@keyframes bin-uploading-bob {
-  0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-2px); }
-}
-.bin-progress-track {
-  height: 6px;
-  background: var(--bg);
+
+/* Inline progress bar shown directly under the row while uploading */
+.pm-progress-track {
+  height: 3px;
+  background: var(--panel-3);
   border-radius: 999px;
   overflow: hidden;
 }
-.bin-progress-fill {
+.pm-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  background: var(--accent);
   border-radius: 999px;
   transition: width 0.15s linear;
 }
 
-/* ---- Selected file card ---- */
-.bin-selected {
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--panel-2);
-  padding: var(--s-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-3);
-}
-.bin-selected-head {
-  display: flex;
-  gap: var(--s-3);
-  align-items: center;
-}
-.bin-thumb {
-  width: 56px;
-  height: 56px;
-  min-width: 56px;
-  border-radius: var(--r-sm);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  color: var(--muted);
-  font-weight: 700;
-  font-size: 11px;
-  letter-spacing: 0.5px;
-}
-.bin-thumb.small {
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  font-size: 10px;
-}
-.bin-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.bin-thumb-ext {
-  background: linear-gradient(135deg, var(--panel-3), var(--panel-2));
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-strong);
-}
-.bin-selected-meta {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.bin-selected-name {
-  font-weight: 600;
-  color: var(--text-strong);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.bin-selected-tag {
-  margin-top: 4px;
-}
-.bin-selected-actions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-/* ---- Send-as toggle ---- */
-.bin-sendas {
-  border-top: 1px dashed var(--border);
-  padding-top: var(--s-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-.bin-sendas-head .field-label {
-  color: var(--text-strong);
-  font-weight: 500;
-}
-.bin-sendas-options {
-  display: flex;
-  flex-direction: column;
-  gap: var(--s-2);
-}
-.bin-sendas-opt {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--s-2);
-  padding: var(--s-2) var(--s-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--bg);
-  cursor: pointer;
-  transition: border-color var(--t-fast), background var(--t-fast);
-}
-.bin-sendas-opt:hover {
-  border-color: var(--border-strong);
-}
-.bin-sendas-opt.active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.bin-sendas-opt input[type="radio"] {
-  margin-top: 3px;
-  accent-color: var(--accent);
-}
-.bin-sendas-title {
-  font-weight: 500;
-  color: var(--text-strong);
-  font-size: var(--text-md);
-}
-.bin-sendas-sub {
-  color: var(--muted);
+.pm-binary-err {
   font-size: var(--text-sm);
-  margin-top: 2px;
-}
-.bin-sendas-sub code {
-  background: var(--panel-3);
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 11px;
-}
-.bin-fieldname-input {
-  margin-top: 8px;
-  width: 100%;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 6px 8px;
-  color: var(--text);
-  font-size: var(--text-sm);
-}
-.bin-fieldname-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-/* ---- Status banners ---- */
-.bin-banner {
-  display: flex;
-  gap: var(--s-2);
-  align-items: center;
-  padding: var(--s-2) var(--s-3);
-  border-radius: var(--r-sm);
-  font-size: var(--text-sm);
-  animation: bin-banner-in 220ms ease-out;
-}
-.bin-banner.success {
-  background: rgba(16, 185, 129, 0.1);
-  border: 1px solid rgba(16, 185, 129, 0.3);
-  color: var(--g-2xx);
-}
-.bin-banner.error {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
   color: var(--g-5xx);
-}
-@keyframes bin-banner-in {
-  from { opacity: 0; transform: translateY(-3px); }
-  to   { opacity: 1; transform: translateY(0); }
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 3px solid var(--g-5xx);
+  padding: 6px 10px;
+  border-radius: 2px;
 }
 
-/* ---- Library (existing uploads list) ---- */
-.bin-library {
+/* Library: tight rows like Postman's history panel */
+.pm-library {
   border-top: 1px solid var(--border);
   padding-top: var(--s-3);
 }
-.bin-library-toggle {
+.pm-library-toggle {
   background: none;
   border: none;
   color: var(--muted);
@@ -3059,60 +2887,102 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 0;
+  padding: 2px 0;
   font-size: var(--text-sm);
   font-family: inherit;
 }
-.bin-library-toggle:hover {
+.pm-library-toggle:hover {
   color: var(--text);
 }
-.bin-library-list {
+.pm-library-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-top: var(--s-2);
-  max-height: 220px;
+  margin-top: 6px;
+  max-height: 200px;
   overflow-y: auto;
-  padding-right: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
 }
-.bin-library-row {
+.pm-library-row {
   display: flex;
   align-items: center;
   gap: var(--s-2);
   padding: 6px 8px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  cursor: pointer;
-  text-align: left;
-  font-family: inherit;
-  color: var(--text);
-  transition: border-color var(--t-fast), background var(--t-fast);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  transition: background var(--t-fast);
 }
-.bin-library-row:hover {
-  border-color: var(--accent);
+.pm-library-row:last-child {
+  border-bottom: none;
+}
+.pm-library-row:hover {
+  background: var(--panel-2);
+}
+.pm-library-row.active {
   background: var(--accent-soft);
 }
-.bin-library-meta {
+.pm-library-thumb {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.pm-library-ext {
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+}
+.pm-library-pick {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  padding: 0;
 }
-.bin-library-name {
+.pm-library-name {
   font-size: var(--text-sm);
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.bin-library-cta {
-  color: var(--muted);
+.pm-library-check {
+  color: var(--g-2xx);
+  font-weight: 700;
   font-size: var(--text-sm);
-  opacity: 0;
-  transition: opacity var(--t-fast);
 }
-.bin-library-row:hover .bin-library-cta {
+.pm-library-del {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  opacity: 0;
+  transition: opacity var(--t-fast), color var(--t-fast);
+  font-family: inherit;
+}
+.pm-library-row:hover .pm-library-del {
   opacity: 1;
-  color: var(--accent-2);
+}
+.pm-library-del:hover {
+  color: var(--g-5xx);
 }

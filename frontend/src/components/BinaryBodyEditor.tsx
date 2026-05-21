@@ -3,9 +3,11 @@ import { deleteUpload, listUploads, uploadFile, uploadUrl } from "../api";
 import type { BinaryBodyConfig, Upload } from "../types";
 
 /**
- * Edits a step body for bodyType="binary". The body is stored as JSON
- * `{uploadId, fieldName?}`. Empty fieldName = send raw bytes with the file's
- * stored MIME type. Non-empty = wrap as multipart/form-data with that one field.
+ * Postman-style binary body editor.
+ *
+ * Body is JSON `{uploadId, fieldName?}`. Empty fieldName = raw bytes
+ * with the file's stored MIME type. Set fieldName = multipart/form-data
+ * with that one field.
  */
 const MAX_BYTES = 10 * 1024 * 1024; // mirrors backend MAX_UPLOAD_BYTES
 
@@ -19,15 +21,12 @@ export function BinaryBodyEditor(props: {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const cfg = parseCfg(body);
   const currentId = cfg?.uploadId ?? "";
   const fieldName = cfg?.fieldName ?? "";
-  const sendAs: "raw" | "form" = fieldName ? "form" : "raw";
   const selected = uploads.find((u) => u.id === currentId);
   const otherUploads = uploads.filter((u) => u.id !== currentId);
 
@@ -35,13 +34,6 @@ export function BinaryBodyEditor(props: {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
-
-  // Auto-hide success banner after 3 s so it doesn't linger forever.
-  useEffect(() => {
-    if (!success) return;
-    const t = setTimeout(() => setSuccess(null), 3000);
-    return () => clearTimeout(t);
-  }, [success]);
 
   async function refresh() {
     try {
@@ -67,7 +59,6 @@ export function BinaryBodyEditor(props: {
 
   async function handleFile(file: File) {
     setErr(null);
-    setSuccess(null);
     if (file.size > MAX_BYTES) {
       setErr(`File is ${humanSize(file.size)} — max upload is ${humanSize(MAX_BYTES)}.`);
       return;
@@ -78,7 +69,6 @@ export function BinaryBodyEditor(props: {
       const u = await uploadFile(projectId, file, (pct) => setProgress(pct));
       setUploads((prev) => [u, ...prev.filter((p) => p.id !== u.id)]);
       writeCfg({ uploadId: u.id });
-      setSuccess(`Uploaded "${u.filename}" — ready to send.`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Upload failed");
     } finally {
@@ -93,32 +83,23 @@ export function BinaryBodyEditor(props: {
     if (file) void handleFile(file);
   }
 
-  function onDrop(e: React.DragEvent<HTMLDivElement>) {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) void handleFile(file);
+  function clearSelection() {
+    writeCfg({ uploadId: "" });
   }
 
-  async function removeSelected() {
-    if (!selected) return;
-    if (!confirm(`Delete "${selected.filename}" from this project's uploads?`)) return;
-    setBusy(true);
+  async function deleteFromLibrary(id: string, filename: string) {
+    if (!confirm(`Delete "${filename}" from this project's uploads?`)) return;
     try {
-      await deleteUpload(selected.id);
-      setUploads((prev) => prev.filter((p) => p.id !== selected.id));
-      writeCfg({ uploadId: "" });
-      setSuccess(null);
+      await deleteUpload(id);
+      setUploads((prev) => prev.filter((p) => p.id !== id));
+      if (id === currentId) clearSelection();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Delete failed");
-    } finally {
-      setBusy(false);
     }
   }
 
   return (
-    <div className="bin-editor">
-      {/* Hidden native picker — opened by buttons / dropzone clicks */}
+    <div className="pm-binary">
       <input
         ref={fileRef}
         type="file"
@@ -126,193 +107,119 @@ export function BinaryBodyEditor(props: {
         onChange={onFilePicked}
       />
 
-      {/* ===== Empty state: a clear, clickable dropzone ===== */}
-      {!selected && !busy && (
-        <div
-          className={`bin-dropzone ${dragOver ? "drag-over" : ""}`}
-          role="button"
-          tabIndex={0}
+      {/* ===== Postman-style file row ===== */}
+      <div className="pm-binary-row">
+        <button
+          type="button"
+          className="pm-select-btn"
           onClick={() => fileRef.current?.click()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              fileRef.current?.click();
-            }
-          }}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={onDrop}
+          disabled={busy}
         >
-          <div className="bin-dropzone-icon">📁</div>
-          <div className="bin-dropzone-title">
-            {dragOver ? "Drop to upload" : "Click to browse or drag a file here"}
-          </div>
-          <div className="bin-dropzone-sub">
-            Stored on this project · up to {humanSize(MAX_BYTES)} · any file type
-          </div>
-        </div>
-      )}
-
-      {/* ===== Busy state: progress bar with percentage ===== */}
-      {busy && (
-        <div className="bin-uploading">
-          <div className="bin-uploading-head">
-            <span className="bin-uploading-icon">⬆</span>
-            <span>Uploading…</span>
-            <span className="muted small">{progress ?? 0}%</span>
-          </div>
-          <div className="bin-progress-track">
-            <div
-              className="bin-progress-fill"
-              style={{ width: `${progress ?? 0}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {/* ===== Selected file card ===== */}
-      {selected && !busy && (
-        <div className="bin-selected">
-          <div className="bin-selected-head">
-            <div className="bin-thumb">
-              {isImage(selected.mimeType) ? (
-                <img src={uploadUrl(selected.id)} alt={selected.filename} />
-              ) : (
-                <span className="bin-thumb-ext">{fileExt(selected.filename)}</span>
-              )}
-            </div>
-            <div className="bin-selected-meta">
-              <div className="bin-selected-name" title={selected.filename}>
+          {busy ? "Uploading…" : selected ? "Select File" : "Select File"}
+        </button>
+        <div className="pm-file-display">
+          {busy ? (
+            <span className="muted small">Uploading… {progress ?? 0}%</span>
+          ) : selected ? (
+            <>
+              <span className="pm-file-name" title={selected.filename}>
                 {selected.filename}
-              </div>
-              <div className="muted small">
-                {selected.mimeType || "unknown"} · {humanSize(selected.sizeBytes)}
-              </div>
-              <div className="bin-selected-tag">
-                <span className="meta-chip success">✓ attached to this step</span>
-              </div>
-            </div>
-            <div className="bin-selected-actions">
+              </span>
+              <span className="muted small">· {humanSize(selected.sizeBytes)}</span>
               <button
                 type="button"
-                className="ghost small"
-                onClick={() => fileRef.current?.click()}
-                title="Upload a different file"
+                className="pm-clear-btn"
+                onClick={clearSelection}
+                title="Remove file"
               >
-                ↻ Replace
+                ×
               </button>
-              <button
-                type="button"
-                className="ghost destructive small"
-                onClick={removeSelected}
-                title="Delete from project uploads"
-              >
-                🗑 Delete
-              </button>
-            </div>
-          </div>
+            </>
+          ) : (
+            <span className="muted small">No file chosen</span>
+          )}
+        </div>
+      </div>
 
-          {/* Send-as toggle */}
-          <div className="bin-sendas">
-            <div className="bin-sendas-head">
-              <span className="field-label">How to send this file</span>
-              <span className="field-hint">Choose how the request body is built</span>
-            </div>
-            <div className="bin-sendas-options">
-              <label className={`bin-sendas-opt ${sendAs === "raw" ? "active" : ""}`}>
-                <input
-                  type="radio"
-                  name="bin-sendas"
-                  checked={sendAs === "raw"}
-                  onChange={() => writeCfg({ fieldName: "" })}
-                />
-                <div>
-                  <div className="bin-sendas-title">Raw bytes</div>
-                  <div className="bin-sendas-sub">
-                    Body = file contents · <code>Content-Type: {selected.mimeType || "application/octet-stream"}</code>
-                  </div>
-                </div>
-              </label>
-              <label className={`bin-sendas-opt ${sendAs === "form" ? "active" : ""}`}>
-                <input
-                  type="radio"
-                  name="bin-sendas"
-                  checked={sendAs === "form"}
-                  onChange={() => writeCfg({ fieldName: fieldName || "file" })}
-                />
-                <div style={{ flex: 1 }}>
-                  <div className="bin-sendas-title">Form field (multipart/form-data)</div>
-                  <div className="bin-sendas-sub">
-                    Wraps the file as one form field — needed by most upload endpoints
-                  </div>
-                  {sendAs === "form" && (
-                    <input
-                      type="text"
-                      className="bin-fieldname-input"
-                      placeholder="field name (e.g. file, avatar, attachment)"
-                      value={fieldName}
-                      onChange={(e) => writeCfg({ fieldName: e.target.value })}
-                      onClick={(e) => e.preventDefault()}
-                    />
-                  )}
-                </div>
-              </label>
-            </div>
-          </div>
+      {/* Inline progress bar while uploading */}
+      {busy && (
+        <div className="pm-progress-track">
+          <div className="pm-progress-fill" style={{ width: `${progress ?? 0}%` }} />
         </div>
       )}
 
-      {/* ===== Inline status banners ===== */}
-      {success && (
-        <div className="bin-banner success">
-          <span>✓</span><span>{success}</span>
-        </div>
-      )}
-      {err && (
-        <div className="bin-banner error">
-          <span>⚠</span><span>{err}</span>
-        </div>
-      )}
+      {/* Inline error */}
+      {err && <div className="pm-binary-err">{err}</div>}
 
-      {/* ===== Library: existing uploads from this project ===== */}
-      {otherUploads.length > 0 && (
-        <div className="bin-library">
+      {/* ===== Field name (multipart vs raw) ===== */}
+      <label className="field">
+        <div className="field-head">
+          <span className="field-label">Field name (optional)</span>
+          <span className="field-hint">
+            Empty = raw bytes · Set = multipart/form-data with this field
+          </span>
+        </div>
+        <input
+          type="text"
+          placeholder="e.g. file, avatar, attachment"
+          value={fieldName}
+          onChange={(e) => writeCfg({ fieldName: e.target.value })}
+          disabled={!selected || busy}
+        />
+      </label>
+
+      {/* ===== Library: previously uploaded files in this project ===== */}
+      {uploads.length > 0 && (
+        <div className="pm-library">
           <button
             type="button"
-            className="bin-library-toggle"
+            className="pm-library-toggle"
             onClick={() => setShowLibrary(!showLibrary)}
           >
             <span>{showLibrary ? "▾" : "▸"}</span>
-            <span>
-              {selected ? "Choose a different file" : "Or use a file already uploaded"} ({otherUploads.length})
-            </span>
+            <span>Project uploads ({uploads.length})</span>
           </button>
           {showLibrary && (
-            <div className="bin-library-list">
-              {otherUploads.map((u) => (
-                <button
-                  key={u.id}
-                  type="button"
-                  className="bin-library-row"
-                  onClick={() => { writeCfg({ uploadId: u.id }); setShowLibrary(false); }}
-                  title={`${u.mimeType} · ${humanSize(u.sizeBytes)}`}
-                >
-                  <div className="bin-thumb small">
+            <div className="pm-library-list">
+              {uploads.map((u) => {
+                const isActive = u.id === currentId;
+                return (
+                  <div
+                    key={u.id}
+                    className={`pm-library-row ${isActive ? "active" : ""}`}
+                  >
                     {isImage(u.mimeType) ? (
-                      <img src={uploadUrl(u.id)} alt="" />
+                      <img
+                        className="pm-library-thumb"
+                        src={uploadUrl(u.id)}
+                        alt=""
+                      />
                     ) : (
-                      <span className="bin-thumb-ext">{fileExt(u.filename)}</span>
+                      <span className="pm-library-ext">{fileExt(u.filename)}</span>
                     )}
+                    <button
+                      type="button"
+                      className="pm-library-pick"
+                      onClick={() => { writeCfg({ uploadId: u.id }); setShowLibrary(false); }}
+                      title="Use this file"
+                    >
+                      <span className="pm-library-name">{u.filename}</span>
+                      <span className="muted small">
+                        {u.mimeType || "unknown"} · {humanSize(u.sizeBytes)}
+                      </span>
+                    </button>
+                    {isActive && <span className="pm-library-check" title="In use">✓</span>}
+                    <button
+                      type="button"
+                      className="pm-library-del"
+                      onClick={() => deleteFromLibrary(u.id, u.filename)}
+                      title="Delete from project"
+                    >
+                      🗑
+                    </button>
                   </div>
-                  <div className="bin-library-meta">
-                    <div className="bin-library-name">{u.filename}</div>
-                    <div className="muted small">
-                      {u.mimeType || "unknown"} · {humanSize(u.sizeBytes)}
-                    </div>
-                  </div>
-                  <div className="bin-library-cta">use →</div>
-                </button>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

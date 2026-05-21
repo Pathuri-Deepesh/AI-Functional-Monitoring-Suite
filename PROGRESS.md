@@ -157,13 +157,13 @@
 - [x] **16.8** UX: "Run Now" on a Flow now auto-runs the prereq chain first (force=true), so flows never fail on stale tokens — *2026-05-21*
 - [x] **16.9** UX: Audit button renamed "Generate report" — snapshots current state (no re-check); `?refresh=true` opt-in for full re-check — *2026-05-21*
 - [x] **16.10** Smoke test: upload → list → readback → delete round-trip — *2026-05-21*
-- [x] **16.11** Frontend: BinaryBodyEditor redesigned as full dropzone — click anywhere or drag-drop, with hover/dragover states — *2026-05-21*
-- [x] **16.12** Frontend: real upload progress bar (XHR `onprogress` with %) replaces opaque "Uploading…" text — *2026-05-21*
+- [x] **16.11** Frontend: BinaryBodyEditor rebuilt in **Postman style** — "Select File" button + inline filename + clear (×); compact and utilitarian — *2026-05-21*
+- [x] **16.12** Frontend: real upload progress bar (XHR `onprogress` %) — thin inline bar under the file row — *2026-05-21*
 - [x] **16.13** Frontend: client-side max-size guard (10MB) shows inline error before hitting the server — *2026-05-21*
-- [x] **16.14** Frontend: selected-file card with thumb / extension badge / size / inline replace+delete actions — *2026-05-21*
-- [x] **16.15** Frontend: explicit "Raw bytes" vs "Form field (multipart/form-data)" radio toggle replaces cryptic empty-fieldname semantics — *2026-05-21*
-- [x] **16.16** Frontend: inline success/error banners with auto-dismiss (3s) after upload completes or fails — *2026-05-21*
-- [x] **16.17** Frontend: project upload library collapsed by default with toggle — cleaner default view when many files exist — *2026-05-21*
+- [x] **16.14** Frontend: inline filename + size display with × clear button (Postman binary tab layout) — *2026-05-21*
+- [x] **16.15** Frontend: "Field name (optional)" inline input — empty = raw bytes, set = multipart (matches Postman's single-tab semantic) — *2026-05-21*
+- [x] **16.16** Frontend: inline left-bar error message (no large banners) — *2026-05-21*
+- [x] **16.17** Frontend: project uploads library — collapsible list of tight rows with thumb/ext, ✓ for active, hover-only delete — *2026-05-21*
 - [x] **16.18** Frontend: FlowCard surfaces a "🔑 Refreshing access tokens…" banner during the prereq phase of Run Now — *2026-05-21*
 - [x] **16.19** Frontend: Audit button copy → "Snapshot & report"; tooltip explicitly says "no re-checks" — *2026-05-21*
 
