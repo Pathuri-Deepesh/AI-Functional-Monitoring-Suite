@@ -153,3 +153,4 @@
 16.17,Phase 1.16 - Binary uploads + UX tightening,Frontend: project uploads library - collapsible tight rows with thumb/ext / check for active / hover-only delete,Done,2026-05-21,Postman-style tight row list
 16.18,Phase 1.16 - Binary uploads + UX tightening,Frontend: Flow card surfaces "Refreshing access tokens..." banner during prereq phase,Done,2026-05-21,Previously only a PREREQ pill switch - banner makes the wait self-explanatory
 16.19,Phase 1.16 - Binary uploads + UX tightening,Frontend: Audit button copy "Snapshot & report" + tooltip clarifies no re-checks happen,Done,2026-05-21,Button now reads as the action it performs
+16.20,Phase 1.16 - Binary uploads + UX tightening,Fix: x button on selected file now deletes from project (not just unbinds from step),Done,2026-05-21,User reported: deleted file still appeared in Project uploads list

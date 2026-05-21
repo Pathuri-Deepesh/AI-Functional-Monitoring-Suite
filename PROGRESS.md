@@ -166,6 +166,7 @@
 - [x] **16.17** Frontend: project uploads library — collapsible list of tight rows with thumb/ext, ✓ for active, hover-only delete — *2026-05-21*
 - [x] **16.18** Frontend: FlowCard surfaces a "🔑 Refreshing access tokens…" banner during the prereq phase of Run Now — *2026-05-21*
 - [x] **16.19** Frontend: Audit button copy → "Snapshot & report"; tooltip explicitly says "no re-checks" — *2026-05-21*
+- [x] **16.20** Fix: × button on selected file now deletes from project (not just unbinds from step) — *2026-05-21*
 
 ## Phase 1.9 — Postman parity ✅ Complete
 

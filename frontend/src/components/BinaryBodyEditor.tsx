@@ -83,16 +83,12 @@ export function BinaryBodyEditor(props: {
     if (file) void handleFile(file);
   }
 
-  function clearSelection() {
-    writeCfg({ uploadId: "" });
-  }
-
-  async function deleteFromLibrary(id: string, filename: string) {
+  async function deleteFile(id: string, filename: string) {
     if (!confirm(`Delete "${filename}" from this project's uploads?`)) return;
     try {
       await deleteUpload(id);
       setUploads((prev) => prev.filter((p) => p.id !== id));
-      if (id === currentId) clearSelection();
+      if (id === currentId) writeCfg({ uploadId: "" });
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Delete failed");
     }
@@ -129,8 +125,8 @@ export function BinaryBodyEditor(props: {
               <button
                 type="button"
                 className="pm-clear-btn"
-                onClick={clearSelection}
-                title="Remove file"
+                onClick={() => deleteFile(selected.id, selected.filename)}
+                title="Delete this file from the project"
               >
                 ×
               </button>
@@ -212,7 +208,7 @@ export function BinaryBodyEditor(props: {
                     <button
                       type="button"
                       className="pm-library-del"
-                      onClick={() => deleteFromLibrary(u.id, u.filename)}
+                      onClick={() => deleteFile(u.id, u.filename)}
                       title="Delete from project"
                     >
                       🗑
