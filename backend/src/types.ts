@@ -1,7 +1,30 @@
 export type StatusGroup = "2xx" | "3xx" | "4xx" | "5xx" | "error";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH";
-export type BodyType = "none" | "json" | "form" | "urlencoded" | "raw";
+export type BodyType = "none" | "json" | "form" | "urlencoded" | "raw" | "binary";
+
+/**
+ * A file uploaded once and referenced by `bodyType: "binary"` steps via its id.
+ * The on-disk path is derived from the id; we don't store full paths in the DB.
+ */
+export interface Upload {
+  id: string;
+  projectId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: number;
+}
+
+/**
+ * Shape stored in a step's `body` field when bodyType === "binary".
+ * fieldName empty/missing = send as raw binary with the file's MIME type.
+ * fieldName set = send as multipart/form-data with that field name.
+ */
+export interface BinaryBodyConfig {
+  uploadId: string;
+  fieldName?: string;
+}
 
 export interface ApiKey {
   id: string;

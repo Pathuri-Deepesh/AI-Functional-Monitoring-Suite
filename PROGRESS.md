@@ -145,6 +145,28 @@
 - [x] **15.11** Frontend: progress bar shows `retry N of M (waiting before next try…)` + last-try status code chip — *2026-05-20*
 - [x] **15.12** Smoke test: 503 endpoint with 3 retries — attempts 1→4 transitions including backoff phase all visible — *2026-05-20*
 
+## Phase 1.16 — Binary uploads + UX tightening ✅ Complete
+
+- [x] **16.1** Backend: `uploads` table + on-disk storage in `data/uploads/<uuid>` — *2026-05-21*
+- [x] **16.2** Backend: `paths.ts` helper centralises UPLOADS_DIR + per-id path — *2026-05-21*
+- [x] **16.3** Backend: 3 routes — `POST/GET/DELETE /api/(projects/:id/)uploads` (raw bytes via `express.raw`, 10MB cap, URL-encoded filename header) — *2026-05-21*
+- [x] **16.4** Backend: store CRUD (`createUpload`, `getUpload`, `listUploadsByProject`, `deleteUpload`) — *2026-05-21*
+- [x] **16.5** Backend: `bodyType="binary"` in `timing.ts` → parses `{uploadId, fieldName?}` body, builds raw or multipart/form-data — *2026-05-21*
+- [x] **16.6** Frontend: shared `BinaryBodyEditor` — file picker, image preview, field-name input, existing-uploads picker — *2026-05-21*
+- [x] **16.7** Frontend: Binary tab wired into URL editor + Flow step editor + Prereq step editor — *2026-05-21*
+- [x] **16.8** UX: "Run Now" on a Flow now auto-runs the prereq chain first (force=true), so flows never fail on stale tokens — *2026-05-21*
+- [x] **16.9** UX: Audit button renamed "Generate report" — snapshots current state (no re-check); `?refresh=true` opt-in for full re-check — *2026-05-21*
+- [x] **16.10** Smoke test: upload → list → readback → delete round-trip — *2026-05-21*
+- [x] **16.11** Frontend: BinaryBodyEditor redesigned as full dropzone — click anywhere or drag-drop, with hover/dragover states — *2026-05-21*
+- [x] **16.12** Frontend: real upload progress bar (XHR `onprogress` with %) replaces opaque "Uploading…" text — *2026-05-21*
+- [x] **16.13** Frontend: client-side max-size guard (10MB) shows inline error before hitting the server — *2026-05-21*
+- [x] **16.14** Frontend: selected-file card with thumb / extension badge / size / inline replace+delete actions — *2026-05-21*
+- [x] **16.15** Frontend: explicit "Raw bytes" vs "Form field (multipart/form-data)" radio toggle replaces cryptic empty-fieldname semantics — *2026-05-21*
+- [x] **16.16** Frontend: inline success/error banners with auto-dismiss (3s) after upload completes or fails — *2026-05-21*
+- [x] **16.17** Frontend: project upload library collapsed by default with toggle — cleaner default view when many files exist — *2026-05-21*
+- [x] **16.18** Frontend: FlowCard surfaces a "🔑 Refreshing access tokens…" banner during the prereq phase of Run Now — *2026-05-21*
+- [x] **16.19** Frontend: Audit button copy → "Snapshot & report"; tooltip explicitly says "no re-checks" — *2026-05-21*
+
 ## Phase 1.9 — Postman parity ✅ Complete
 
 - [x] **6.1** HTTP method support (GET / POST / PUT / PATCH; DELETE blocked) — *2026-05-11*
@@ -185,6 +207,14 @@
 
 ## Recent activity
 
+### Today 2026-05-21 — Binary uploads + Flow/Audit UX (19 items)
+- New `uploads` table + on-disk store; raw POST via `express.raw` (10MB cap, x-filename header)
+- `BinaryBodyEditor` shared across URL / Flow step / Prereq step editors with image preview + reuse picker
+- `timing.ts` handles `bodyType="binary"` two ways: raw bytes when no field name, multipart/form-data when set
+- Flow "Run Now" auto-runs the prereq chain first (force=true) so a fresh token is always available
+- Audit button now produces a **snapshot** of current state by default — `?refresh=true` is the opt-in for the old "re-check everything" behaviour
+- **Upload UX overhaul** (9 sub-items): full dropzone with drag-drop, real progress %, client-side size guard, selected-file card with thumb + ext badge, Raw vs Form-field radio toggle, success/error banners, collapsible library, prereq-running banner, audit relabel
+
 ### Friday 2026-05-08 — Storage + History + Audit foundation (16 items)
 - Migrated entire backend from JSON file to SQLite (`node:sqlite` built-in)
 - Built check history table with 7-day retention + auto-pruning
@@ -215,6 +245,7 @@
 **Next up (in order):**
 1. Get Slack Bot Token from workspace and paste in Settings *(7.6)*
 2. Schedule Phase 2 kick-off meeting with manager *(9.5)*
+3. End-to-end demo of binary upload feature: POST an image to httpbin/post and verify the response echoes the multipart field
 
 ---
 

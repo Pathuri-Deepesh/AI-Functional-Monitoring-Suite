@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { addApiKey, addUrl, createProject, removeApiKey, updateProject } from "../api";
 import type { Assertion, AssertionType, BodyType, HttpMethod, KeyValue, Project } from "../types";
+import { BinaryBodyEditor } from "./BinaryBodyEditor";
 
 interface BaseProps {
   onDone: (msg?: string) => void | Promise<void>;
@@ -14,6 +15,7 @@ const BODY_TYPES: { value: BodyType; label: string; hint: string }[] = [
   { value: "raw", label: "Raw", hint: "Plain text with custom Content-Type (XML, HTML, JS, etc.)" },
   { value: "urlencoded", label: "x-www-form-urlencoded", hint: "key=value&foo=bar" },
   { value: "form", label: "Form-data", hint: "JSON list: [{key, value}]" },
+  { value: "binary", label: "Binary", hint: "Upload a file (image, PDF, etc.)" },
 ];
 
 const RAW_CONTENT_TYPE_PRESETS: { value: string; label: string }[] = [
@@ -249,6 +251,7 @@ export function AddUrlForm(props: BaseProps & { project: Project }) {
           setBody={setBody}
           bodyContentType={bodyContentType}
           setBodyContentType={setBodyContentType}
+          projectId={props.project.id}
         />
       )}
 
@@ -284,8 +287,9 @@ function BodyEditor(props: {
   setBody: (b: string) => void;
   bodyContentType: string;
   setBodyContentType: (c: string) => void;
+  projectId: string;
 }) {
-  const { bodyType, setBodyType, body, setBody, bodyContentType, setBodyContentType } = props;
+  const { bodyType, setBodyType, body, setBody, bodyContentType, setBodyContentType, projectId } = props;
 
   // Is the current content-type one of the presets?
   const isPreset = RAW_CONTENT_TYPE_PRESETS.some(
@@ -382,6 +386,10 @@ function BodyEditor(props: {
 
       {bodyType === "form" && (
         <FormFieldsEditor body={body} setBody={setBody} />
+      )}
+
+      {bodyType === "binary" && (
+        <BinaryBodyEditor body={body} setBody={setBody} projectId={projectId} />
       )}
 
       {bodyType === "none" && (

@@ -34,25 +34,30 @@ export interface AuditResult {
 
 /**
  * Run an audit on a project:
- *   1. Re-check every standalone URL (in parallel, capped at 8)
- *   2. Re-run every enabled flow (in parallel — each flow's steps run sequentially)
- *   3. Generate an HTML report covering both
- *   4. Deliver via Slack (Block Kit + file upload if bot token; webhook fallback)
+ *   1. (optional) Re-check every URL + re-run every enabled flow when refresh=true
+ *   2. Generate an HTML report from the current saved state
+ *   3. Deliver via Slack (Block Kit + file upload if bot token; webhook fallback)
+ *
+ * Default `refresh=false` = snapshot of what the UI currently shows (fast).
+ * Pass `refresh=true` to force a full re-run before the report — used by the
+ * scheduler or any caller that wants the freshest possible numbers.
  */
 export async function runAuditAndDeliver(
   projectId: string,
   reportsDir: string,
-  baseUrl = "http://localhost:4000"
+  baseUrl = "http://localhost:4000",
+  options: { refresh?: boolean } = {}
 ): Promise<AuditResult> {
   const project = getProject(projectId);
   if (!project) throw new Error("Project not found");
 
-  // 1. Re-check URLs + re-run flows in parallel (independent work)
-  const urlsTask = checkAllInProject(projectId, 8);
-  const flows = listFlowsByProject(projectId).filter((f) => f.enabled);
-  const flowRunsTask = Promise.all(flows.map((f) => runFlow(f.id)));
-
-  await Promise.all([urlsTask, flowRunsTask]);
+  // 1. Optionally re-check URLs + re-run flows in parallel before snapshotting.
+  if (options.refresh) {
+    const urlsTask = checkAllInProject(projectId, 8);
+    const flows = listFlowsByProject(projectId).filter((f) => f.enabled);
+    const flowRunsTask = Promise.all(flows.map((f) => runFlow(f.id)));
+    await Promise.all([urlsTask, flowRunsTask]);
+  }
 
   // 2. Load URLs + per-URL stats + sparklines (24h window) for the report
   const urls = listUrlsByProject(projectId);

@@ -274,6 +274,19 @@ function initSchema(d: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_prereq_runs_project_time ON prereq_runs(project_id, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_prereq_step_results_run ON prereq_step_results(prereq_run_id, position);
     CREATE INDEX IF NOT EXISTS idx_project_variable_cache_expiry ON project_variable_cache(expires_at);
+
+    -- ===== UPLOADS (binary files referenced by bodyType="binary" steps) =====
+    CREATE TABLE IF NOT EXISTS uploads (
+      id          TEXT PRIMARY KEY,
+      project_id  TEXT NOT NULL,
+      filename    TEXT NOT NULL,
+      mime_type   TEXT NOT NULL,
+      size_bytes  INTEGER NOT NULL,
+      created_at  INTEGER NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_uploads_project ON uploads(project_id, created_at DESC);
   `);
 
   // Idempotent column additions for existing databases

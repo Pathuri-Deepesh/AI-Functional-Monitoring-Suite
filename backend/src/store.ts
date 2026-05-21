@@ -24,6 +24,7 @@ import type {
   StatusGroup,
   StepResult,
   Timings,
+  Upload,
   UrlStats,
 } from "./types.js";
 
@@ -324,7 +325,7 @@ export function getUrl(id: string): MonitoredUrl | undefined {
 }
 
 const ALLOWED_METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH"];
-const ALLOWED_BODY_TYPES: BodyType[] = ["none", "json", "form", "urlencoded", "raw"];
+const ALLOWED_BODY_TYPES: BodyType[] = ["none", "json", "form", "urlencoded", "raw", "binary"];
 
 export function addUrl(input: {
   projectId: string;
@@ -1561,6 +1562,73 @@ export function cacheProjectVariable(
 
 export function clearProjectVariableCache(projectId: string): void {
   db().prepare("DELETE FROM project_variable_cache WHERE project_id = ?").run(projectId);
+}
+
+// =============================================================
+// UPLOADS (binary files referenced by steps with bodyType="binary")
+// =============================================================
+
+interface UploadRow {
+  id: string;
+  project_id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  created_at: number;
+}
+
+function rowToUpload(r: UploadRow): Upload {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    filename: r.filename,
+    mimeType: r.mime_type,
+    sizeBytes: r.size_bytes,
+    createdAt: r.created_at,
+  };
+}
+
+export function createUpload(input: {
+  projectId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}): Upload {
+  if (!getProject(input.projectId)) throw new Error("Project not found");
+  const id = randomUUID();
+  const createdAt = Date.now();
+  db()
+    .prepare(
+      `INSERT INTO uploads (id, project_id, filename, mime_type, size_bytes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      id,
+      input.projectId,
+      input.filename.trim() || "upload",
+      input.mimeType || "application/octet-stream",
+      input.sizeBytes,
+      createdAt
+    );
+  return { id, projectId: input.projectId, filename: input.filename, mimeType: input.mimeType, sizeBytes: input.sizeBytes, createdAt };
+}
+
+export function getUpload(id: string): Upload | undefined {
+  const row = db().prepare("SELECT * FROM uploads WHERE id = ?").get(id) as
+    | UploadRow
+    | undefined;
+  return row ? rowToUpload(row) : undefined;
+}
+
+export function listUploadsByProject(projectId: string): Upload[] {
+  const rows = db()
+    .prepare("SELECT * FROM uploads WHERE project_id = ? ORDER BY created_at DESC")
+    .all(projectId) as unknown as UploadRow[];
+  return rows.map(rowToUpload);
+}
+
+export function deleteUpload(id: string): boolean {
+  return db().prepare("DELETE FROM uploads WHERE id = ?").run(id).changes > 0;
 }
 
 export function getUrlSparkline(

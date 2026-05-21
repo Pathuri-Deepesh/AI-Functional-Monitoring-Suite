@@ -1,6 +1,21 @@
 export type StatusGroup = "2xx" | "3xx" | "4xx" | "5xx" | "error";
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH";
-export type BodyType = "none" | "json" | "form" | "urlencoded" | "raw";
+export type BodyType = "none" | "json" | "form" | "urlencoded" | "raw" | "binary";
+
+export interface Upload {
+  id: string;
+  projectId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: number;
+}
+
+/** Stored in a step's `body` (as JSON) when bodyType === "binary". */
+export interface BinaryBodyConfig {
+  uploadId: string;
+  fieldName?: string;
+}
 
 export interface ApiKey {
   id: string;

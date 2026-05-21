@@ -204,10 +204,10 @@ export function ProjectView(props: Props) {
             title={
               urls.length === 0
                 ? "Add at least one URL first"
-                : "Re-check every URL and post a report to Slack"
+                : "Snapshot the current state of every URL and flow into an HTML report and post it to Slack. Uses last-known status — no re-checks."
             }
           >
-            {props.auditRunning ? "Running audit…" : "🚀 Run audit"}
+            {props.auditRunning ? "Snapshotting…" : "📊 Snapshot & report"}
           </button>
           <button className="ghost" onClick={props.onSettings} title="Project settings">
             ⚙

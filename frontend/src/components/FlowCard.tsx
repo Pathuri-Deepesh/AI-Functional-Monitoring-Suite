@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchFlow, fetchFlowRun, listFlowRuns, runFlowAsync } from "../api";
+import {
+  fetchFlow,
+  fetchFlowRun,
+  fetchPrereqRun,
+  fetchPrereqs,
+  listFlowRuns,
+  runFlowAsync,
+  runPrereqsAsync,
+} from "../api";
 import { Spinner } from "./Spinner";
 import type { Flow, FlowRun, FlowWithSteps, LiveStepProgress, StatusGroup, StepResult } from "../types";
 
@@ -37,6 +45,8 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
   /** While a run is in-flight: the live FlowRun being polled. null otherwise. */
   const [activeRun, setActiveRun] = useState<FlowRun | null>(null);
   const [running, setRunning] = useState(false);
+  /** Set to "prereq" while we're refreshing tokens, "flow" while the flow runs. */
+  const [runPhase, setRunPhase] = useState<"prereq" | "flow" | null>(null);
   const pollAbort = useRef<{ cancelled: boolean } | null>(null);
 
   async function load() {
@@ -66,14 +76,39 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     pollAbort.current = abort;
     const deadline = Date.now() + POLL_TIMEOUT_MS;
     try {
-      // force=true → manual click should always do real work (bypasses smart TTL cache)
+      // 1. Refresh prereq tokens first when the project has any. Skipped silently
+      //    if prereqs are disabled or empty — flow runs straight through.
+      //    Mirrors what scheduler tick() does, but on user demand.
+      try {
+        const bundle = await fetchPrereqs(flow.projectId);
+        if (bundle.enabled && bundle.steps.length > 0) {
+          setRunPhase("prereq");
+          const { runId: prereqRunId } = await runPrereqsAsync(flow.projectId, { force: true });
+          while (!abort.cancelled && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            if (abort.cancelled) return;
+            try {
+              const pr = await fetchPrereqRun(prereqRunId);
+              if (pr.endedAt != null) break;
+            } catch {
+              // transient — keep polling
+            }
+          }
+        }
+      } catch {
+        // Prereq fetch/run failures shouldn't block the flow — the flow may not
+        // even use prereq vars, and if it does the user will see the resulting
+        // failure clearly.
+      }
+      if (abort.cancelled) return;
+
+      // 2. Run the flow. force=true bypasses the per-step TTL skip cache.
+      setRunPhase("flow");
       const { runId } = await runFlowAsync(flow.id, { force: true });
-      // Initial fetch so the UI shows the run row even before step 1 completes
       try {
         const initial = await fetchFlowRun(runId);
         if (!abort.cancelled) setActiveRun(initial);
       } catch {}
-      // Poll until the run ends or we hit the deadline
       while (!abort.cancelled && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         if (abort.cancelled) return;
@@ -93,6 +128,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     } finally {
       if (!abort.cancelled) {
         setRunning(false);
+        setRunPhase(null);
         setActiveRun(null);
       }
     }
@@ -111,7 +147,9 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     ? "g-2xx"
     : "g-5xx";
   const statusLabel = running
-    ? "RUNNING"
+    ? runPhase === "prereq"
+      ? "PREREQ"
+      : "RUNNING"
     : runOk === null
     ? "PENDING"
     : runOk
@@ -173,7 +211,17 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
         <p className="flow-desc">{flow.description}</p>
       )}
 
-      {running && totalSteps > 0 && (
+      {running && runPhase === "prereq" && (
+        <div className="flow-prereq-banner" role="status" aria-live="polite">
+          <Spinner size={12} />
+          <span>
+            <strong>🔑 Refreshing access tokens…</strong>{" "}
+            <span className="muted small">prereq step runs first so this flow gets fresh values</span>
+          </span>
+        </div>
+      )}
+
+      {running && runPhase === "flow" && totalSteps > 0 && (
         <div
           className={`flow-progress ${isRetrying ? "retrying" : ""}`}
           aria-label={`Running step ${runningStepPosition ?? "—"} of ${totalSteps}`}
