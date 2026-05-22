@@ -47,6 +47,12 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
   const [running, setRunning] = useState(false);
   /** Set to "prereq" while we're refreshing tokens, "flow" while the flow runs. */
   const [runPhase, setRunPhase] = useState<"prereq" | "flow" | null>(null);
+  /** Live progress of the prereq run (only set while runPhase === "prereq"). */
+  const [prereqProgress, setPrereqProgress] = useState<{
+    completed: number;
+    total: number;
+    live: LiveStepProgress | null;
+  } | null>(null);
   const pollAbort = useRef<{ cancelled: boolean } | null>(null);
 
   async function load() {
@@ -83,12 +89,18 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
         const bundle = await fetchPrereqs(flow.projectId);
         if (bundle.enabled && bundle.steps.length > 0) {
           setRunPhase("prereq");
+          setPrereqProgress({ completed: 0, total: bundle.steps.length, live: null });
           const { runId: prereqRunId } = await runPrereqsAsync(flow.projectId, { force: true });
           while (!abort.cancelled && Date.now() < deadline) {
             await new Promise((r) => setTimeout(r, POLL_MS));
             if (abort.cancelled) return;
             try {
               const pr = await fetchPrereqRun(prereqRunId);
+              setPrereqProgress({
+                completed: pr.stepResults.length,
+                total: bundle.steps.length,
+                live: pr.liveStep ?? null,
+              });
               if (pr.endedAt != null) break;
             } catch {
               // transient — keep polling
@@ -130,6 +142,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
         setRunning(false);
         setRunPhase(null);
         setActiveRun(null);
+        setPrereqProgress(null);
       }
     }
   }
@@ -211,15 +224,54 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
         <p className="flow-desc">{flow.description}</p>
       )}
 
-      {running && runPhase === "prereq" && (
-        <div className="flow-prereq-banner" role="status" aria-live="polite">
-          <Spinner size={12} />
-          <span>
-            <strong>🔑 Refreshing access tokens…</strong>{" "}
-            <span className="muted small">prereq step runs first so this flow gets fresh values</span>
-          </span>
-        </div>
-      )}
+      {running && runPhase === "prereq" && (() => {
+        const p = prereqProgress;
+        const pct = p && p.total > 0
+          ? Math.min(100, Math.round((p.completed / p.total) * 100))
+          : 0;
+        const runningPos = p?.live?.position ?? (p ? p.completed + 1 : null);
+        const isRetry = !!p?.live && p.live.attempt > 1;
+        const isBackoff = !!p?.live && p.live.phase === "backoff";
+        return (
+          <div
+            className={`flow-prereq-banner ${isRetry ? "retrying" : ""}`}
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flow-prereq-bar" style={{ width: `${pct}%` }} />
+            <div className="flow-prereq-content">
+              <Spinner size={12} />
+              <span className="flow-prereq-label">
+                <strong>🔑 Refreshing access tokens</strong>
+                {p && (
+                  <>
+                    {" — "}
+                    {p.completed >= p.total
+                      ? "wrapping up…"
+                      : runningPos != null
+                        ? <>step <strong>{runningPos}</strong> of <strong>{p.total}</strong></>
+                        : "starting…"}
+                    {isRetry && p.live && (
+                      <>
+                        {" "}
+                        <span className="meta-chip warn" style={{ marginLeft: 4 }}>
+                          🔁 retry {p.live.attempt - 1}/{p.live.maxAttempts - 1}
+                          {isBackoff ? " (waiting…)" : ""}
+                        </span>
+                      </>
+                    )}
+                  </>
+                )}
+              </span>
+              {p && (
+                <span className="muted small" style={{ marginLeft: "auto" }}>
+                  {p.completed}/{p.total} done · {pct}%
+                </span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {running && runPhase === "flow" && totalSteps > 0 && (
         <div

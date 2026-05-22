@@ -155,3 +155,4 @@
 16.19,Phase 1.16 - Binary uploads + UX tightening,Frontend: Audit button copy "Snapshot & report" + tooltip clarifies no re-checks happen,Done,2026-05-21,Button now reads as the action it performs
 16.20,Phase 1.16 - Binary uploads + UX tightening,Fix: x button on selected file now deletes from project (not just unbinds from step),Done,2026-05-21,User reported: deleted file still appeared in Project uploads list
 16.21,Phase 1.16 - Binary uploads + UX tightening,Replace native window.confirm for upload delete with two-click inline confirm (matches existing step-delete pattern from 15.4),Done,2026-05-21,Stays in-app instead of jumping to browser modal
+16.22,Phase 1.16 - Binary uploads + UX tightening,Prereq banner now shows live step-N-of-M + completed count + retry chip + filling progress bar,Done,2026-05-22,Previously opaque - users couldn't tell if prereq was progressing or stuck

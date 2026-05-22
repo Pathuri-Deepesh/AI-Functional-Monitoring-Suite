@@ -168,6 +168,7 @@
 - [x] **16.19** Frontend: Audit button copy → "Snapshot & report"; tooltip explicitly says "no re-checks" — *2026-05-21*
 - [x] **16.20** Fix: × button on selected file now deletes from project (not just unbinds from step) — *2026-05-21*
 - [x] **16.21** Replace native `window.confirm` for upload delete with two-click inline confirm (matches existing step-delete pattern) — *2026-05-21*
+- [x] **16.22** Prereq banner now shows live `Step N of M` + completed count + retry chip + filling progress bar — *2026-05-22*
 
 ## Phase 1.9 — Postman parity ✅ Complete
 
