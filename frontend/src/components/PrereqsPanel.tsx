@@ -4,6 +4,7 @@ import {
   fetchPrereqRun,
   fetchPrereqs,
   fetchProjectVariables,
+  reorderPrereqSteps,
   runPrereqsAsync,
   updateProject,
 } from "../api";
@@ -17,6 +18,7 @@ import type {
   ProjectVariable,
   StepResult,
 } from "../types";
+import { checkStepVarRefs } from "../utils/varRefs";
 
 const POLL_MS = 500;
 const POLL_TIMEOUT_MS = 5 * 60_000;
@@ -158,6 +160,29 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
       onAfterRun?.();
     } finally {
       setSavingInterval(false);
+    }
+  }
+
+  async function handleReorder(stepId: string, direction: "up" | "down") {
+    const sorted = [...steps].sort((a, b) => a.position - b.position);
+    const idx = sorted.findIndex((s) => s.id === stepId);
+    if (idx < 0) return;
+    const swapWith = direction === "up" ? idx - 1 : idx + 1;
+    if (swapWith < 0 || swapWith >= sorted.length) return;
+    const reordered = [...sorted];
+    [reordered[idx], reordered[swapWith]] = [reordered[swapWith], reordered[idx]];
+    const orderedIds = reordered.map((s) => s.id);
+    // Optimistic update so the swap feels instant
+    if (bundle) {
+      setBundle({
+        ...bundle,
+        steps: reordered.map((s, i) => ({ ...s, position: i + 1 })),
+      });
+    }
+    try {
+      await reorderPrereqSteps(project.id, orderedIds);
+    } catch {
+      await load();
     }
   }
 
@@ -339,21 +364,35 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
           ) : (
             <>
               <div className="step-list">
-                {steps.map((s) => {
-                  const result = displayRun?.stepResults.find((r) => r.stepId === s.id);
-                  const isRunningStep = running && runningStepPosition === s.position;
-                  const isQueued = running && !result && !isRunningStep;
-                  return (
-                    <PrereqStepRow
-                      key={s.id}
-                      step={s}
-                      result={result ?? null}
-                      runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
-                      liveAttempt={isRunningStep ? live : null}
-                      onClick={() => onEditStep(s, steps)}
-                    />
-                  );
-                })}
+                {steps
+                  .slice()
+                  .sort((a, b) => a.position - b.position)
+                  .map((s, idx, arr) => {
+                    const result = displayRun?.stepResults.find((r) => r.stepId === s.id);
+                    const isRunningStep = running && runningStepPosition === s.position;
+                    const isQueued = running && !result && !isRunningStep;
+                    const earlier = arr.slice(0, idx);
+                    const brokenVarRefs = checkStepVarRefs(
+                      s,
+                      earlier,
+                      vars.map((v) => v.name)
+                    );
+                    return (
+                      <PrereqStepRow
+                        key={s.id}
+                        step={s}
+                        result={result ?? null}
+                        runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
+                        liveAttempt={isRunningStep ? live : null}
+                        canMoveUp={idx > 0 && !running}
+                        canMoveDown={idx < arr.length - 1 && !running}
+                        brokenVarRefs={brokenVarRefs}
+                        onMoveUp={() => handleReorder(s.id, "up")}
+                        onMoveDown={() => handleReorder(s.id, "down")}
+                        onClick={() => onEditStep(s, steps)}
+                      />
+                    );
+                  })}
               </div>
               <div className="flow-add-step">
                 <button className="ghost small" onClick={() => onAddStep(steps)}>+ Add prereq step</button>
@@ -392,9 +431,25 @@ function PrereqStepRow(props: {
   result: StepResult | null;
   runState?: "idle" | "running" | "queued";
   liveAttempt?: LiveStepProgress | null;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  brokenVarRefs: string[];
+  onMoveUp: () => void;
+  onMoveDown: () => void;
   onClick: () => void;
 }) {
-  const { step, result, runState = "idle", liveAttempt, onClick } = props;
+  const {
+    step,
+    result,
+    runState = "idle",
+    liveAttempt,
+    canMoveUp,
+    canMoveDown,
+    brokenVarRefs,
+    onMoveUp,
+    onMoveDown,
+    onClick,
+  } = props;
   const ok = result?.ok ?? null;
   const skipped = result?.skipped ?? false;
   const isRetry = !!liveAttempt && liveAttempt.attempt > 1;
@@ -435,7 +490,23 @@ function PrereqStepRow(props: {
     .join(" ");
   return (
     <div className={rowClass} onClick={onClick}>
-      <div className="step-num">{step.position}</div>
+      <div className="step-reorder">
+        <button
+          className="step-reorder-up"
+          onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
+          disabled={!canMoveUp}
+          title="Move up"
+          aria-label="Move step up"
+        >▲</button>
+        <div className="step-num">{step.position}</div>
+        <button
+          className="step-reorder-down"
+          onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
+          disabled={!canMoveDown}
+          title="Move down"
+          aria-label="Move step down"
+        >▼</button>
+      </div>
       <div className="step-main">
         <div className="step-line">
           <span className={`pill ${statusClass}`}>{pillText}</span>
@@ -445,6 +516,16 @@ function PrereqStepRow(props: {
           </span>
         </div>
         {step.description && <div className="step-desc muted small">{step.description}</div>}
+        {brokenVarRefs.length > 0 && (
+          <div className="step-result-meta">
+            <span
+              className="meta-chip warn"
+              title={`These vars aren't extracted by any earlier step and aren't in the project pool: ${brokenVarRefs.join(", ")}`}
+            >
+              ⚠ missing: {brokenVarRefs.map((n) => `{{${n}}}`).join(", ")}
+            </span>
+          </div>
+        )}
         {runState === "running" && isRetry && liveAttempt?.lastErrorReason && (
           <div className="step-result-meta">
             <span className="meta-chip warn" title={liveAttempt.lastErrorReason}>

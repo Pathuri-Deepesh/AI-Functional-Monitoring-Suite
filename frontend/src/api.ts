@@ -279,6 +279,26 @@ export async function reorderFlowSteps(flowId: string, orderedIds: string[]): Pr
   );
 }
 
+export async function copyStepToFlow(stepId: string, targetFlowId: string): Promise<FlowStep> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/steps/${stepId}/copy-to-flow`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetFlowId }),
+    })
+  );
+}
+
+export async function moveStepToFlow(stepId: string, targetFlowId: string): Promise<FlowStep> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/steps/${stepId}/move-to-flow`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetFlowId }),
+    })
+  );
+}
+
 // ---- Flow Runs ----
 export async function runFlowNow(id: string): Promise<FlowRun> {
   return jsonOrThrow(await fetch(`${BASE}/flows/${id}/run`, { method: "POST" }));
@@ -361,6 +381,19 @@ export async function updatePrereqStep(
 
 export async function deletePrereqStep(id: string): Promise<void> {
   await jsonOrThrow(await fetch(`${BASE}/prereq-steps/${id}`, { method: "DELETE" }));
+}
+
+export async function reorderPrereqSteps(
+  projectId: string,
+  orderedIds: string[]
+): Promise<void> {
+  await jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/prereqs/steps/reorder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderedIds }),
+    })
+  );
 }
 
 export async function runPrereqsNow(projectId: string): Promise<PrereqRun> {

@@ -317,7 +317,11 @@ export function ProjectView(props: Props) {
         <div className="tab-body" key="flows">
           <FlowsSectionPanel
             flows={flows}
-            refreshTick={refreshTick}
+            // Combine both ticks so a flow-local event (run finish, step
+            // move/copy between flows) reloads every FlowCard's `detail`, not
+            // just the flow list. Without this the target flow of a Move/Copy
+            // would only show the new step on the next global poll.
+            refreshTick={refreshTick + flowsTick}
             onCreate={props.onCreateFlow}
             onEdit={props.onEditFlow}
             onAddStep={props.onAddStep}

@@ -9,6 +9,7 @@ import {
   addUrl,
   clearProjectVariableCache,
   clearVariableCache,
+  copyFlowStepToFlow,
   createFlow,
   createProject,
   createUpload,
@@ -38,6 +39,7 @@ import {
   listProjects,
   listUploadsByProject,
   listUrlsByProject,
+  moveFlowStepToFlow,
   removeApiKey,
   removeUrl,
   reorderFlowSteps,
@@ -353,6 +355,34 @@ app.post("/api/flows/:flowId/steps/reorder", (req, res) => {
   }
   reorderFlowSteps(req.params.flowId, ids);
   res.json({ ok: true });
+});
+
+app.post("/api/steps/:id/copy-to-flow", (req, res) => {
+  const targetFlowId = req.body?.targetFlowId;
+  if (typeof targetFlowId !== "string" || !targetFlowId) {
+    res.status(400).json({ error: "targetFlowId (string) is required" });
+    return;
+  }
+  try {
+    const created = copyFlowStepToFlow(req.params.id, targetFlowId);
+    res.status(201).json(created);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.post("/api/steps/:id/move-to-flow", (req, res) => {
+  const targetFlowId = req.body?.targetFlowId;
+  if (typeof targetFlowId !== "string" || !targetFlowId) {
+    res.status(400).json({ error: "targetFlowId (string) is required" });
+    return;
+  }
+  try {
+    const moved = moveFlowStepToFlow(req.params.id, targetFlowId);
+    res.json(moved);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 // ---------- Flow Runs ----------

@@ -171,6 +171,22 @@
 - [x] **16.22** Prereq banner now shows live `Step N of M` + completed count + retry chip + filling progress bar — *2026-05-22*
 - [x] **16.23** FlowCard "Run now" lifts the prereq runId so `PrereqsPanel` attaches and shows its full step-by-step progress UI (matching panel's own Run-now behaviour) — *2026-05-22*
 
+## Phase 1.17 — Step orchestration (reorder + move/copy) ✅ Complete
+
+- [x] **17.1** Backend: `copyFlowStepToFlow` + `moveFlowStepToFlow` store fns — transactional, shift target positions +1, insert at pos=1, rebalance source on move — *2026-05-22*
+- [x] **17.2** Backend: `POST /api/steps/:id/copy-to-flow` + `/move-to-flow` routes; 400 on missing step / same flow / missing target — *2026-05-22*
+- [x] **17.3** Frontend: `reorderPrereqSteps`, `copyStepToFlow`, `moveStepToFlow` API wrappers — *2026-05-22*
+- [x] **17.4** Frontend: `utils/varRefs.ts` — `findVarRefs` + `checkStepVarRefs` (scans url + body + headers + query for `{{name}}` against project pool + earlier extractions) — *2026-05-22*
+- [x] **17.5** Frontend: ▲/▼ micro-stack column on every step row (FlowCard + PrereqsPanel); first/last disabled; optimistic swap, disabled while running — *2026-05-22*
+- [x] **17.6** Frontend: hover-revealed `↗ Move` and `📋 Copy` buttons on Flow step rows (not on prereqs); opens `MoveCopyStepModal` — *2026-05-22*
+- [x] **17.7** Frontend: `MoveCopyStepModal` — lists other flows in the project, empty-state when none, confirm-row with `Move →`/`Copy →` — *2026-05-22*
+- [x] **17.8** Frontend: `⚠ missing: {{var}}` warn chip on rows with broken var refs (non-blocking — runtime still attempts and surfaces the real error) — *2026-05-22*
+- [x] **17.9** Smoke test: copy + move + reorder routes verified via curl on Default project (positions rebalanced correctly on both sides) — *2026-05-22*
+- [x] **17.10** Fix: target Flow now auto-refreshes after Move/Copy — ProjectView passes `refreshTick + flowsTick` to FlowsSectionPanel so the receiving card pulls fresh `detail` instead of waiting for a manual reload — *2026-05-22*
+- [x] **17.11** Fix: `deleteFlowStep` + `deletePrereqStep` now rebalance positions inside a `tx()` — gaps from 1,2,3 → 1,2 instead of 1,3 after deleting position 2 — *2026-05-22*
+- [x] **17.12** Scroll position survives page reload — mirrored to `localStorage` under `fm:scroll:<projectId>` on project-switch + `beforeunload` + `pagehide` + `visibilitychange`; one-shot useLayoutEffect on first snapshot restores via double-rAF after layout commits — *2026-05-22*
+- [x] **17.13** Per-project section memory: switching back to a project now restores the last-viewed tab (`#urls` vs `#flows`) instead of forcing `#urls`. Mirrored to `localStorage` under `fm:section:<projectId>` on project-switch + page-hide — *2026-05-22*
+
 ## Phase 1.9 — Postman parity ✅ Complete
 
 - [x] **6.1** HTTP method support (GET / POST / PUT / PATCH; DELETE blocked) — *2026-05-11*
@@ -210,6 +226,19 @@
 ---
 
 ## Recent activity
+
+### 2026-05-22 — Step orchestration follow-ups (3 fixes)
+- **Move/Copy target auto-refreshes**: receiving FlowCard now pulls fresh `detail` immediately instead of needing a manual reload. ProjectView combines its `flowsTick` into the `refreshTick` passed to each FlowCard, so any flow-list mutation also re-fetches every card's step list.
+- **Delete now closes position gaps**: `deleteFlowStep` and `deletePrereqStep` were leaving sparse positions (deleting pos=2 left 1,3). Both now do `DELETE` + `UPDATE … SET position = position - 1 WHERE position > deleted` inside a `tx()`. The UI's optimistic reorder math always worked, but DB state could drift after a delete.
+- **Scroll survives page reload**: per-project scroll position is mirrored to `localStorage` (`fm:scroll:<projectId>`) on project-switch, `beforeunload`, `pagehide`, and `visibilitychange=hidden`. A one-shot `useLayoutEffect` on the first snapshot (gated by `initialRestoreDone` ref) restores via double-`requestAnimationFrame` so the saved Y is applied after the ProjectView's lazy children have expanded.
+- **Section survives project switch**: was always resetting to `#urls` on every sidebar click; now `selectProject` saves the outgoing project's hash and restores the incoming project's last-seen hash (defaulting to `#urls` for first-visit projects). Mirrored to `localStorage` under `fm:section:<projectId>` on project-switch + page-hide so a reload also lands on the right tab.
+
+### 2026-05-22 — Step orchestration: reorder + move/copy between flows (9 items)
+- Steps inside any Flow or the Prereqs chain can now be **reordered** with tiny ▲/▼ buttons in the left margin (first/last disabled, all disabled mid-run, optimistic UI). Reuses the existing `reorderFlowSteps` / new `reorderPrereqSteps` endpoints.
+- Hover-revealed `↗ Move` and `📋 Copy` buttons on every Flow step (not on prereqs). Both open a new `MoveCopyStepModal` that lists the other flows in the project (with status + interval), plus an empty-state row when this is the only flow. **Move** removes the step from the source flow + inserts at position 1 of the target (single transaction, both sides rebalanced). **Copy** inserts a duplicate at position 1 of the target and leaves the source intact.
+- New backend store fns `copyFlowStepToFlow` / `moveFlowStepToFlow` (both inside one `tx()`) and 2 new routes `POST /api/steps/:id/{copy,move}-to-flow`. 400 on missing step, same-flow target, or missing target.
+- New `utils/varRefs.ts` helper scans every step's url + body + customHeaders + queryParams for `{{name}}` tokens and reports any that aren't extracted by an earlier step in the chain and aren't in the project's prereq pool. Reordering or moving a step that now references an unknown var shows a non-blocking `⚠ missing: {{token}}` chip on the row — the user gets a heads-up but isn't blocked from running.
+- Smoke-tested via curl: copy on Default project's 2-step "Smoke test flow" + 3-step "Session-bound API Flow", move back, position rebalancing verified on both sides. All edge cases (same flow, missing step, missing target) return 400 with the right message.
 
 ### 2026-05-22 — Prereq progress UI continuity (1 item)
 - FlowCard's "Run now" now lifts its prereq `runId` up to ProjectView, which passes it to `PrereqsPanel` as `externalRunId`. The panel attaches via a new effect (re-using `handleRun` with the lifted id instead of starting a fresh chain), auto-expands, and shows the same complete progress bar + step-by-step rows that appear when the user clicks the panel's own "Run now". FlowCard keeps its inline banner for in-context feedback.

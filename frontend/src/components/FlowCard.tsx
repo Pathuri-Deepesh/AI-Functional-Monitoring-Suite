@@ -4,12 +4,16 @@ import {
   fetchFlowRun,
   fetchPrereqRun,
   fetchPrereqs,
+  fetchProjectVariables,
   listFlowRuns,
+  reorderFlowSteps,
   runFlowAsync,
   runPrereqsAsync,
 } from "../api";
 import { Spinner } from "./Spinner";
-import type { Flow, FlowRun, FlowWithSteps, LiveStepProgress, StatusGroup, StepResult } from "../types";
+import type { Flow, FlowRun, FlowStep, FlowWithSteps, LiveStepProgress, StatusGroup, StepResult } from "../types";
+import { checkStepVarRefs } from "../utils/varRefs";
+import { MoveCopyStepModal } from "./MoveCopyStepModal";
 
 const GROUP_COLOR: Record<StatusGroup, string> = {
   "2xx": "g-2xx",
@@ -57,14 +61,47 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     total: number;
     live: LiveStepProgress | null;
   } | null>(null);
+  /** Names of vars in the project's prereq pool — used to flag broken refs. */
+  const [projectVarNames, setProjectVarNames] = useState<string[]>([]);
+  /** When set, the Move/Copy modal is open for this step. */
+  const [moveCopyTarget, setMoveCopyTarget] = useState<
+    { mode: "move" | "copy"; step: FlowStep } | null
+  >(null);
   const pollAbort = useRef<{ cancelled: boolean } | null>(null);
 
   async function load() {
     try {
-      const [d, runs] = await Promise.all([fetchFlow(flow.id), listFlowRuns(flow.id, 1)]);
+      const [d, runs, vars] = await Promise.all([
+        fetchFlow(flow.id),
+        listFlowRuns(flow.id, 1),
+        fetchProjectVariables(flow.projectId),
+      ]);
       setDetail(d);
       setLastRun(runs[0] ?? null);
+      setProjectVarNames(vars.map((v) => v.name));
     } catch {}
+  }
+
+  async function handleReorder(stepId: string, direction: "up" | "down") {
+    if (!detail) return;
+    const sorted = [...detail.steps].sort((a, b) => a.position - b.position);
+    const idx = sorted.findIndex((s) => s.id === stepId);
+    if (idx < 0) return;
+    const swapWith = direction === "up" ? idx - 1 : idx + 1;
+    if (swapWith < 0 || swapWith >= sorted.length) return;
+    const reordered = [...sorted];
+    [reordered[idx], reordered[swapWith]] = [reordered[swapWith], reordered[idx]];
+    const orderedIds = reordered.map((s) => s.id);
+    // Optimistic update so the swap feels instant
+    setDetail({
+      ...detail,
+      steps: reordered.map((s, i) => ({ ...s, position: i + 1 })),
+    });
+    try {
+      await reorderFlowSteps(flow.id, orderedIds);
+    } catch {
+      await load();
+    }
   }
 
   useEffect(() => {
@@ -320,6 +357,21 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
         </div>
       )}
 
+      {moveCopyTarget && (
+        <MoveCopyStepModal
+          mode={moveCopyTarget.mode}
+          sourceFlow={flow}
+          step={moveCopyTarget.step}
+          projectId={flow.projectId}
+          onClose={() => setMoveCopyTarget(null)}
+          onDone={() => {
+            setMoveCopyTarget(null);
+            load();
+            onAfterRun?.();
+          }}
+        />
+      )}
+
       {expanded && (
         <div className="flow-body">
           {!detail ? (
@@ -334,25 +386,38 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
           ) : (
             <>
               <div className="step-list">
-                {detail.steps.map((step) => {
-                  const result = displayRun?.stepResults.find((r) => r.stepId === step.id);
-                  const isRunningStep = running && runningStepPosition === step.position;
-                  const isQueued = running && !result && !isRunningStep;
-                  return (
-                    <StepRow
-                      key={step.id}
-                      position={step.position}
-                      method={step.method}
-                      url={step.url}
-                      description={step.description}
-                      extractions={step.extractions.map((e) => e.saveAs).filter(Boolean)}
-                      result={result ?? null}
-                      runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
-                      liveAttempt={isRunningStep ? live : null}
-                      onClick={() => onEditStep(step.id)}
-                    />
-                  );
-                })}
+                {detail.steps
+                  .slice()
+                  .sort((a, b) => a.position - b.position)
+                  .map((step, idx, arr) => {
+                    const result = displayRun?.stepResults.find((r) => r.stepId === step.id);
+                    const isRunningStep = running && runningStepPosition === step.position;
+                    const isQueued = running && !result && !isRunningStep;
+                    const earlier = arr.slice(0, idx);
+                    const brokenVarRefs = checkStepVarRefs(step, earlier, projectVarNames);
+                    return (
+                      <StepRow
+                        key={step.id}
+                        position={step.position}
+                        method={step.method}
+                        url={step.url}
+                        description={step.description}
+                        extractions={step.extractions.map((e) => e.saveAs).filter(Boolean)}
+                        result={result ?? null}
+                        runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
+                        liveAttempt={isRunningStep ? live : null}
+                        canMoveUp={idx > 0 && !running}
+                        canMoveDown={idx < arr.length - 1 && !running}
+                        brokenVarRefs={brokenVarRefs}
+                        onMoveUp={() => handleReorder(step.id, "up")}
+                        onMoveDown={() => handleReorder(step.id, "down")}
+                        onMoveToFlow={() => setMoveCopyTarget({ mode: "move", step })}
+                        onCopyToFlow={() => setMoveCopyTarget({ mode: "copy", step })}
+                        disableActions={running}
+                        onClick={() => onEditStep(step.id)}
+                      />
+                    );
+                  })}
               </div>
               <div className="flow-add-step">
                 <button className="ghost small" onClick={onAddStep}>+ Add step</button>
@@ -379,9 +444,35 @@ function StepRow(props: {
   result: StepResult | null;
   runState?: "idle" | "running" | "queued";
   liveAttempt?: LiveStepProgress | null;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  brokenVarRefs: string[];
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onMoveToFlow: () => void;
+  onCopyToFlow: () => void;
+  disableActions: boolean;
   onClick: () => void;
 }) {
-  const { position, method, url, description, extractions, result, runState = "idle", liveAttempt, onClick } = props;
+  const {
+    position,
+    method,
+    url,
+    description,
+    extractions,
+    result,
+    runState = "idle",
+    liveAttempt,
+    canMoveUp,
+    canMoveDown,
+    brokenVarRefs,
+    onMoveUp,
+    onMoveDown,
+    onMoveToFlow,
+    onCopyToFlow,
+    disableActions,
+    onClick,
+  } = props;
   const ok = result?.ok ?? null;
   const skipped = result?.skipped ?? false;
   const isRetry = !!liveAttempt && liveAttempt.attempt > 1;
@@ -422,7 +513,23 @@ function StepRow(props: {
     .join(" ");
   return (
     <div className={rowClass} onClick={onClick}>
-      <div className="step-num">{position}</div>
+      <div className="step-reorder">
+        <button
+          className="step-reorder-up"
+          onClick={(e) => { e.stopPropagation(); onMoveUp(); }}
+          disabled={!canMoveUp}
+          title="Move up"
+          aria-label="Move step up"
+        >▲</button>
+        <div className="step-num">{position}</div>
+        <button
+          className="step-reorder-down"
+          onClick={(e) => { e.stopPropagation(); onMoveDown(); }}
+          disabled={!canMoveDown}
+          title="Move down"
+          aria-label="Move step down"
+        >▼</button>
+      </div>
       <div className="step-main">
         <div className="step-line">
           <span className={`pill ${statusClass}`}>{pillText}</span>
@@ -432,6 +539,16 @@ function StepRow(props: {
           </span>
         </div>
         {description && <div className="step-desc muted small">{description}</div>}
+        {brokenVarRefs.length > 0 && (
+          <div className="step-result-meta">
+            <span
+              className="meta-chip warn"
+              title={`These vars aren't extracted by any earlier step and aren't in the project pool: ${brokenVarRefs.join(", ")}`}
+            >
+              ⚠ missing: {brokenVarRefs.map((n) => `{{${n}}}`).join(", ")}
+            </span>
+          </div>
+        )}
         {/* While retrying: surface why the previous attempt failed */}
         {runState === "running" && isRetry && liveAttempt?.lastErrorReason && (
           <div className="step-result-meta">
@@ -475,6 +592,20 @@ function StepRow(props: {
             <span className="meta-chip muted">will capture: {extractions.join(", ")}</span>
           </div>
         )}
+      </div>
+      <div className="step-actions">
+        <button
+          className="step-move"
+          onClick={(e) => { e.stopPropagation(); onMoveToFlow(); }}
+          disabled={disableActions}
+          title="Move this step to another flow (removed from this flow)"
+        >↗ Move</button>
+        <button
+          className="step-copy"
+          onClick={(e) => { e.stopPropagation(); onCopyToFlow(); }}
+          disabled={disableActions}
+          title="Copy this step to another flow (kept in this flow)"
+        >📋 Copy</button>
       </div>
       <div className="step-edit-hint">edit ›</div>
     </div>
