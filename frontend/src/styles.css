@@ -1557,6 +1557,141 @@ input::placeholder { color: var(--muted-2); }
   flex-shrink: 0;
 }
 
+/* Tiny vertical micro-stack on the left of each step row: ▲ / position / ▼
+   so users can reorder steps without dragging. */
+.step-reorder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.step-reorder-up,
+.step-reorder-down {
+  width: 22px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  border-radius: var(--r-sm);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.step-reorder-up:hover:not(:disabled),
+.step-reorder-down:hover:not(:disabled) {
+  background: var(--panel-3);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.step-reorder-up:disabled,
+.step-reorder-down:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+/* Hover-revealed move/copy buttons. Sit between step-main and step-edit-hint. */
+.step-actions {
+  display: flex;
+  gap: 4px;
+  align-self: center;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.step-row:hover .step-actions { opacity: 1; }
+.step-row.step-running .step-actions,
+.step-row.step-queued .step-actions { opacity: 0; pointer-events: none; }
+.step-move,
+.step-copy {
+  font-size: var(--text-xs);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.step-move:hover:not(:disabled),
+.step-copy:hover:not(:disabled) {
+  background: var(--panel-3);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.step-move:disabled,
+.step-copy:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Move/Copy modal — vertical list of target flows */
+.move-copy-modal { display: flex; flex-direction: column; gap: var(--s-3); }
+.move-copy-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.move-copy-source-url {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--text-xs);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.move-copy-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.move-copy-target {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.move-copy-target:hover:not(:disabled) {
+  background: var(--panel-3);
+  border-color: var(--border-strong);
+}
+.move-copy-target.selected {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+.move-copy-target-name {
+  font-weight: 600;
+  color: var(--text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .flow-add-step {
   display: flex;
   justify-content: space-between;

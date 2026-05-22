@@ -34,6 +34,9 @@ import type {
 
 const POLL_MS = 3000;
 const ACTIVE_PROJECT_KEY = "fm:active-project-id";
+const SCROLL_KEY_PREFIX = "fm:scroll:";
+const SECTION_KEY_PREFIX = "fm:section:";
+type SectionTab = "urls" | "flows";
 
 function readSavedProjectId(): string | null {
   try {
@@ -49,6 +52,49 @@ function saveProjectId(id: string | null): void {
     else window.localStorage.removeItem(ACTIVE_PROJECT_KEY);
   } catch {
     /* ignore (e.g. private mode quota) */
+  }
+}
+
+function readSavedScroll(projectId: string): number {
+  try {
+    const v = window.localStorage.getItem(SCROLL_KEY_PREFIX + projectId);
+    if (!v) return 0;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function saveScroll(projectId: string, y: number): void {
+  try {
+    if (y > 0) {
+      window.localStorage.setItem(SCROLL_KEY_PREFIX + projectId, String(Math.floor(y)));
+    } else {
+      window.localStorage.removeItem(SCROLL_KEY_PREFIX + projectId);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function readSavedSection(projectId: string): SectionTab | null {
+  try {
+    const v = window.localStorage.getItem(SECTION_KEY_PREFIX + projectId);
+    return v === "urls" || v === "flows" ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSection(projectId: string, hash: string): void {
+  try {
+    const clean = hash.replace(/^#/, "");
+    if (clean === "urls" || clean === "flows") {
+      window.localStorage.setItem(SECTION_KEY_PREFIX + projectId, clean);
+    }
+  } catch {
+    /* ignore */
   }
 }
 
@@ -81,27 +127,35 @@ export default function App() {
   /**
    * In-memory per-project scroll position cache.
    * Switching projects: save outgoing scrollY → restore incoming (or 0 on first visit).
-   * Lives only in this session — page reload resets all positions to 0, which is fine.
+   * Mirrored to localStorage on selectProject + page-hide so a reload returns
+   * the user to where they left off.
    */
   const scrollPositions = useRef<Map<string, number>>(new Map());
-  /** Whether we've already done the first project-mount (skip scroll restore on it). */
+  /** Whether we've already done the first project-mount (skip in-session restore on it). */
   const skipNextScrollRestore = useRef(true);
+  /** One-shot guard for the post-reload restore from localStorage (only the first snapshot triggers it). */
+  const initialRestoreDone = useRef(false);
 
   /**
-   * Switch to a project AND reset the section tab to "urls" (the default).
-   * Reason: when the user explicitly clicks a different project, they expect
-   * to start fresh on the most common section — not land on Flows just because
-   * that's what they were viewing in the previous project.
-   * (Direct page refresh still respects the #urls / #flows hash for deep linking.)
+   * Switch projects, remembering both scroll AND section per project.
+   * - Outgoing project: snapshot its current scroll + section to localStorage.
+   * - Incoming project: restore its last section (default "urls" for first-visit
+   *   projects), and let the scroll-restore effect handle the Y position.
+   * Direct page refresh still respects the #urls / #flows hash for deep linking
+   * (we don't override the URL on first render — only on explicit project clicks).
    */
   function selectProject(id: string) {
     if (id === activeProjectId) return;
-    // Save the outgoing project's scroll so we can restore it if the user comes back
     if (activeProjectId) {
-      scrollPositions.current.set(activeProjectId, window.scrollY);
+      const y = window.scrollY;
+      scrollPositions.current.set(activeProjectId, y);
+      saveScroll(activeProjectId, y);
+      saveSection(activeProjectId, window.location.hash || "#urls");
     }
-    if (window.location.hash !== "#urls") {
-      window.history.replaceState(null, "", "#urls");
+    const targetSection: SectionTab = readSavedSection(id) ?? "urls";
+    const targetHash = `#${targetSection}`;
+    if (window.location.hash !== targetHash) {
+      window.history.replaceState(null, "", targetHash);
       // Dispatch hashchange so ProjectView's listener picks it up if it doesn't remount in time.
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     }
@@ -120,6 +174,48 @@ export default function App() {
     requestAnimationFrame(() => {
       window.scrollTo({ top: saved, behavior: "auto" });
     });
+  }, [activeProjectId]);
+
+  // One-shot: after the *first* snapshot for the *initial* project hydrates, restore
+  // the scroll position the user left off at before the last page reload.
+  // Gated on `snapshot` so the ProjectView has actually mounted with real content
+  // (otherwise scrollTo before layout would silently clamp to 0).
+  useLayoutEffect(() => {
+    if (initialRestoreDone.current) return;
+    if (!activeProjectId || !snapshot) return;
+    initialRestoreDone.current = true;
+    const saved = readSavedScroll(activeProjectId);
+    if (saved <= 0) return;
+    // Seed the in-memory cache too so a project-switch round-trip preserves the same spot.
+    scrollPositions.current.set(activeProjectId, saved);
+    // Double-rAF: first frame lets the ProjectView paint, second gives lazy children a tick to expand.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: saved, behavior: "auto" });
+      });
+    });
+  }, [activeProjectId, snapshot]);
+
+  // Persist current scroll position whenever the page is about to be hidden
+  // (reload, tab close, tab switch). beforeunload alone is unreliable on mobile,
+  // so we also listen to pagehide + visibilitychange.
+  useEffect(() => {
+    function save() {
+      if (!activeProjectId) return;
+      saveScroll(activeProjectId, window.scrollY);
+      saveSection(activeProjectId, window.location.hash || "#urls");
+    }
+    function onVisibility() {
+      if (document.visibilityState === "hidden") save();
+    }
+    window.addEventListener("beforeunload", save);
+    window.addEventListener("pagehide", save);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("beforeunload", save);
+      window.removeEventListener("pagehide", save);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [activeProjectId]);
 
   function pushToast(message: string, kind: ToastItem["kind"] = "success") {

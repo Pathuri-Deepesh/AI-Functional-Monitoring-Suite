@@ -956,8 +956,15 @@ export function updateFlowStep(
 }
 
 export function deleteFlowStep(id: string): boolean {
-  const result = db().prepare("DELETE FROM flow_steps WHERE id = ?").run(id);
-  return result.changes > 0;
+  const existing = getFlowStep(id);
+  if (!existing) return false;
+  tx(() => {
+    db().prepare("DELETE FROM flow_steps WHERE id = ?").run(id);
+    db()
+      .prepare("UPDATE flow_steps SET position = position - 1 WHERE flow_id = ? AND position > ?")
+      .run(existing.flowId, existing.position);
+  });
+  return true;
 }
 
 export function reorderFlowSteps(flowId: string, orderedIds: string[]): void {
@@ -968,6 +975,108 @@ export function reorderFlowSteps(flowId: string, orderedIds: string[]): void {
         .run(idx + 1, stepId, flowId);
     });
   });
+}
+
+/**
+ * Insert a fresh copy of `source` at position 1 of `targetFlowId`. Shifts the
+ * target flow's existing steps down by one (position += 1) inside a single tx
+ * so the (flowId, position) sequence stays contiguous.
+ */
+function insertStepCopyAtTop(targetFlowId: string, source: FlowStep): FlowStep {
+  const newId = randomUUID();
+  tx(() => {
+    db()
+      .prepare("UPDATE flow_steps SET position = position + 1 WHERE flow_id = ?")
+      .run(targetFlowId);
+    db()
+      .prepare(
+        `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
+                                 api_key_id, assertions_json, custom_headers_json, query_params_json,
+                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        newId,
+        targetFlowId,
+        source.description,
+        source.url,
+        source.method,
+        source.bodyType,
+        source.body,
+        source.bodyContentType,
+        source.apiKeyId,
+        JSON.stringify(source.assertions),
+        JSON.stringify(source.customHeaders),
+        JSON.stringify(source.queryParams),
+        JSON.stringify(source.extractions),
+        source.waitBeforeMs,
+        source.maxRetries,
+        source.retryBackoffMs
+      );
+  });
+  return getFlowStep(newId)!;
+}
+
+export function copyFlowStepToFlow(stepId: string, targetFlowId: string): FlowStep {
+  const source = getFlowStep(stepId);
+  if (!source) throw new Error("Source step not found");
+  const target = getFlow(targetFlowId);
+  if (!target) throw new Error("Target flow not found");
+  return insertStepCopyAtTop(targetFlowId, source);
+}
+
+export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowStep {
+  const source = getFlowStep(stepId);
+  if (!source) throw new Error("Source step not found");
+  if (source.flowId === targetFlowId) {
+    throw new Error("Source and target flow are the same");
+  }
+  const target = getFlow(targetFlowId);
+  if (!target) throw new Error("Target flow not found");
+
+  const sourceFlowId = source.flowId;
+  const sourcePosition = source.position;
+  let newId = "";
+  tx(() => {
+    // Shift target down and insert the copy at position 1
+    db()
+      .prepare("UPDATE flow_steps SET position = position + 1 WHERE flow_id = ?")
+      .run(targetFlowId);
+    newId = randomUUID();
+    db()
+      .prepare(
+        `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
+                                 api_key_id, assertions_json, custom_headers_json, query_params_json,
+                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        newId,
+        targetFlowId,
+        source.description,
+        source.url,
+        source.method,
+        source.bodyType,
+        source.body,
+        source.bodyContentType,
+        source.apiKeyId,
+        JSON.stringify(source.assertions),
+        JSON.stringify(source.customHeaders),
+        JSON.stringify(source.queryParams),
+        JSON.stringify(source.extractions),
+        source.waitBeforeMs,
+        source.maxRetries,
+        source.retryBackoffMs
+      );
+    // Delete source + rebalance source flow so positions stay contiguous
+    db().prepare("DELETE FROM flow_steps WHERE id = ?").run(stepId);
+    db()
+      .prepare(
+        "UPDATE flow_steps SET position = position - 1 WHERE flow_id = ? AND position > ?"
+      )
+      .run(sourceFlowId, sourcePosition);
+  });
+  return getFlowStep(newId)!;
 }
 
 // ---- Flow Runs ----
@@ -1390,7 +1499,15 @@ export function updatePrereqStep(
 }
 
 export function deletePrereqStep(id: string): boolean {
-  return db().prepare("DELETE FROM prereq_steps WHERE id = ?").run(id).changes > 0;
+  const existing = getPrereqStep(id);
+  if (!existing) return false;
+  tx(() => {
+    db().prepare("DELETE FROM prereq_steps WHERE id = ?").run(id);
+    db()
+      .prepare("UPDATE prereq_steps SET position = position - 1 WHERE project_id = ? AND position > ?")
+      .run(existing.projectId, existing.position);
+  });
+  return true;
 }
 
 export function reorderPrereqSteps(projectId: string, orderedIds: string[]): void {
