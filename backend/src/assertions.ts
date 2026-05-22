@@ -4,7 +4,7 @@ import type { Assertion, AssertionResult } from "./types.js";
 export function evaluateAssertions(
   assertions: Assertion[],
   outcome: { statusCode: number | null; totalMs: number | null; responseBody: string },
-  vars: Record<string, string> = {}
+  vars: Record<string, unknown> = {}
 ): AssertionResult[] {
   return assertions.map((a) => evaluateOne(a, outcome, vars));
 }
@@ -12,7 +12,7 @@ export function evaluateAssertions(
 function evaluateOne(
   a: Assertion,
   outcome: { statusCode: number | null; totalMs: number | null; responseBody: string },
-  vars: Record<string, string>
+  vars: Record<string, unknown>
 ): AssertionResult {
   switch (a.type) {
     case "status-equals": {

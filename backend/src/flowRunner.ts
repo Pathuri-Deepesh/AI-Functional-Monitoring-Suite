@@ -48,6 +48,10 @@ export interface LiveStepProgress {
   lastErrorReason: string | null;
   phase: "executing" | "backoff";
   nextRetryAtMs: number | null; // wall clock when the next attempt fires (during backoff)
+  /** Phase 1.18 — current iteration (1-indexed) when running a for-each step. null otherwise. */
+  forEachIteration: number | null;
+  /** Phase 1.18 — total iterations being run (capped at FOR_EACH_MAX). null when not iterating. */
+  forEachTotal: number | null;
 }
 const liveStepByRun = new Map<string, LiveStepProgress>();
 
@@ -67,15 +71,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function substituteKv(items: KeyValue[], vars: Record<string, string>): KeyValue[] {
+function substituteKv(items: KeyValue[], vars: Record<string, unknown>): KeyValue[] {
   return items.map((it) => ({ key: it.key, value: substitute(it.value, vars) }));
 }
 
 /**
  * Apply variable substitution to all string fields of a step before execution.
  * Variables come from earlier steps in the same flow run (and from the TTL cache).
+ * Phase 1.18: vars may include object/array values (e.g., a for-each iteration item).
  */
-function substituteStep(step: FlowStep, vars: Record<string, string>): FlowStep {
+function substituteStep(step: FlowStep, vars: Record<string, unknown>): FlowStep {
   return {
     ...step,
     url: substitute(step.url, vars),
@@ -90,13 +95,38 @@ function substituteStep(step: FlowStep, vars: Record<string, string>): FlowStep 
  * the TTL cache and still fresh. This is the "smart caching" optimization:
  * don't re-login if the token is still valid.
  */
-function canSkipStepFromCache(step: FlowStep, cachedVars: Record<string, string>): boolean {
+function canSkipStepFromCache(step: FlowStep, cachedVars: Record<string, unknown>): boolean {
   if (step.extractions.length === 0) return false;
   // Every extraction must (a) have a TTL set AND (b) have a cached value
   return step.extractions.every(
     (ex) => (ex.ttlSeconds ?? 0) > 0 && cachedVars[ex.saveAs] != null && ex.saveAs.length > 0
   );
 }
+
+/**
+ * Phase 1.18 — coerce a variable value to the string form expected by the
+ * flow_runs.variables_json snapshot, the variable_cache table, and Slack alerts.
+ * Arrays/objects become JSON; scalars pass through.
+ */
+function varToString(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function flattenVariables(vars: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(vars)) out[k] = varToString(v);
+  return out;
+}
+
+/** Phase 1.18 — hard cap on iterations for a single for-each step. */
+const FOR_EACH_MAX = 100;
 
 interface StepOutcome {
   ok: boolean;
@@ -111,8 +141,12 @@ interface StepOutcome {
 
 async function executeStep(
   step: FlowStep,
-  vars: Record<string, string>,
-  runId?: string
+  vars: Record<string, unknown>,
+  runId?: string,
+  liveExtras: { forEachIteration: number | null; forEachTotal: number | null } = {
+    forEachIteration: null,
+    forEachTotal: null,
+  }
 ): Promise<StepOutcome> {
   // Note: `vars` is used both for header/body substitution above (via substituteStep)
   // and for resolving {{vars}} inside assertion config (e.g., body-contains).
@@ -148,6 +182,8 @@ async function executeStep(
         lastErrorReason,
         phase: "executing",
         nextRetryAtMs: null,
+        forEachIteration: liveExtras.forEachIteration,
+        forEachTotal: liveExtras.forEachTotal,
       });
     }
     const result = await timedFetch({
@@ -224,6 +260,8 @@ async function executeStep(
         lastErrorReason,
         phase: "backoff",
         nextRetryAtMs: Date.now() + backoff,
+        forEachIteration: liveExtras.forEachIteration,
+        forEachTotal: liveExtras.forEachTotal,
       });
     }
     await sleep(backoff);
@@ -260,7 +298,9 @@ async function executeRun(
 
   // Seed variables. Order matters: project pool first (lowest priority), then
   // flow-scoped TTL cache (flow-scoped wins on name conflict).
-  const variables: Record<string, string> = {
+  // Phase 1.18: this map now holds `unknown` values — arrays (from `[*]` extracts)
+  // and per-iteration item objects (during a for-each step) live alongside strings.
+  const variables: Record<string, unknown> = {
     ...getProjectVariables(flow.projectId),
     ...getCachedVariables(flow.id),
   };
@@ -295,7 +335,7 @@ async function executeRun(
     if (!options.force && canSkipStepFromCache(step, variables)) {
       const cachedExtractions: ExtractedValue[] = step.extractions.map((ex) => ({
         saveAs: ex.saveAs,
-        value: variables[ex.saveAs] ?? "",
+        value: varToString(variables[ex.saveAs] ?? ""),
         fromCache: true,
       }));
       recordStepResult({
@@ -321,19 +361,121 @@ async function executeRun(
       await sleep(step.waitBeforeMs);
     }
 
-    // Substitute {{vars}} into this step's fields
+    // ============================================================
+    // Phase 1.18 — For-each iteration branch
+    // ============================================================
+    if (step.forEach) {
+      const arr = variables[step.forEach.arrayVarName];
+      if (!Array.isArray(arr)) {
+        recordStepResult({
+          flowRunId: runId,
+          stepId: step.id,
+          position: step.position,
+          statusCode: null,
+          statusGroup: "error",
+          errorReason: `forEach: variable '${step.forEach.arrayVarName}' is not an array`,
+          timings: emptyTimings(),
+          assertionResults: [],
+          extractedValues: [],
+          attempts: 0,
+          skipped: false,
+          skipReason: null,
+          ok: false,
+          iterationIndex: null,
+          iterationCount: null,
+        });
+        allOk = false;
+        if (!failedAtStepId) failedAtStepId = step.id;
+        if (flow.stopOnFailure) upstreamFailed = true;
+        continue;
+      }
+
+      const capped = arr.slice(0, FOR_EACH_MAX);
+      const total = capped.length;
+      let anyOk = false;
+      let anyFailed = false;
+
+      for (let i = 0; i < total; i++) {
+        const iterationVars: Record<string, unknown> = {
+          ...variables,
+          [step.forEach.itemVarName]: capped[i],
+        };
+        const resolved = substituteStep(step, iterationVars);
+        const outcome = await executeStep(resolved, iterationVars, runId, {
+          forEachIteration: i + 1,
+          forEachTotal: total,
+        });
+
+        recordStepResult({
+          flowRunId: runId,
+          stepId: step.id,
+          position: step.position,
+          statusCode: outcome.statusCode,
+          statusGroup: outcome.statusGroup,
+          errorReason: outcome.errorReason,
+          timings: outcome.timings,
+          assertionResults: outcome.assertionResults,
+          extractedValues: outcome.extractedValues,
+          attempts: outcome.attempts,
+          skipped: false,
+          skipReason: null,
+          ok: outcome.ok,
+          iterationIndex: i,
+          iterationCount: total,
+        });
+
+        if (outcome.ok) anyOk = true;
+        else anyFailed = true;
+      }
+
+      // The for-each step as a whole is "ok" iff every iteration passed.
+      // We deliberately never set `upstreamFailed` here — iteration failures
+      // don't halt the flow (matches the locked design: continue + report).
+      if (anyFailed) {
+        allOk = false;
+        if (!failedAtStepId) failedAtStepId = step.id;
+      }
+      // If the array was empty, record a single sentinel result so the UI has
+      // something to show ("for each (0)") rather than a silent gap.
+      if (total === 0) {
+        recordStepResult({
+          flowRunId: runId,
+          stepId: step.id,
+          position: step.position,
+          statusCode: null,
+          statusGroup: null,
+          errorReason: `forEach: '${step.forEach.arrayVarName}' resolved to an empty array — nothing to iterate`,
+          timings: emptyTimings(),
+          assertionResults: [],
+          extractedValues: [],
+          attempts: 0,
+          skipped: true,
+          skipReason: "for-each over empty array",
+          ok: true,
+          iterationIndex: null,
+          iterationCount: 0,
+        });
+      }
+      void anyOk; // (kept for future "at least one passed" semantics)
+      continue;
+    }
+
+    // ============================================================
+    // Normal (non-iterating) path
+    // ============================================================
     const resolved = substituteStep(step, variables);
 
     const outcome = await executeStep(resolved, variables, runId);
 
     // Stash extracted values into the running `variables` map AND cache them
-    // with TTL if configured.
+    // with TTL if configured. Arrays stay as arrays in memory but JSON-stringify
+    // on the way into the TTL cache (which is a TEXT column).
     for (const ev of outcome.extractedValues) {
       variables[ev.saveAs] = ev.value;
     }
     for (const ex of step.extractions) {
       if ((ex.ttlSeconds ?? 0) > 0 && variables[ex.saveAs] != null) {
-        cacheVariable(flow.id, ex.saveAs, variables[ex.saveAs], ex.ttlSeconds!);
+        cacheVariable(flow.id, ex.saveAs, varToString(variables[ex.saveAs]), ex.ttlSeconds!);
       }
     }
 
@@ -361,7 +503,7 @@ async function executeRun(
   }
 
   const totalMs = Date.now() - startedAt;
-  finishFlowRun({ id: runId, ok: allOk, failedAtStepId, variables, totalMs });
+  finishFlowRun({ id: runId, ok: allOk, failedAtStepId, variables: flattenVariables(variables), totalMs });
   markFlowRunCompletedAt(flow.id, startedAt);
   // Tear down the live-progress slot — no more attempts coming for this run
   liveStepByRun.delete(runId);

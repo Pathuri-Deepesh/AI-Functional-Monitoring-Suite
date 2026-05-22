@@ -166,6 +166,21 @@ export interface Extraction {
   ttlSeconds?: number | null;
 }
 
+/**
+ * Phase 1.18 — for-each iteration.
+ * When set on a FlowStep, the step is executed once per element of the array stored
+ * in `arrayVarName` (resolved at run time). Each iteration binds the current element
+ * to `itemVarName` so the step's URL/body/headers can reference `{{item.id}}` etc.
+ * Hard server-side cap of 100 iterations; failed iterations don't stop the loop or
+ * the flow. Single-level only — one for-each step max per flow.
+ */
+export interface ForEachConfig {
+  /** Name of an array-typed variable extracted by an earlier step (e.g. `students`). */
+  arrayVarName: string;
+  /** Loop-local name bound to the current element (e.g. `student` → `{{student.id}}`). */
+  itemVarName: string;
+}
+
 export interface FlowStep {
   id: string;
   flowId: string;
@@ -191,6 +206,8 @@ export interface FlowStep {
   maxRetries: number;
   /** Initial backoff between retries; doubled after each failed retry. */
   retryBackoffMs: number;
+  /** Phase 1.18 — when set, this step runs once per element of the named array variable. */
+  forEach: ForEachConfig | null;
 }
 
 export interface Flow {
@@ -215,7 +232,12 @@ export interface FlowWithSteps extends Flow {
 
 export interface ExtractedValue {
   saveAs: string;
-  value: string;
+  /**
+   * String for scalar extractions; array for `[*]` wildcard extractions (Phase 1.18).
+   * Arrays are JSON-stringified when persisted to step_results.extracted_values
+   * and to the variable_cache table.
+   */
+  value: string | unknown[];
   fromCache: boolean;
 }
 
@@ -235,6 +257,13 @@ export interface StepResult {
   skipReason: string | null;
   ok: boolean;
   checkedAt: number;
+  /**
+   * Phase 1.18 — for-each iteration tracking. NULL for non-iterating steps
+   * (every step pre-1.18). For iterating steps, `iterationIndex` is 0..N-1
+   * and `iterationCount` is N (the same on every iteration row of the same step).
+   */
+  iterationIndex: number | null;
+  iterationCount: number | null;
 }
 
 export interface FlowRun {
