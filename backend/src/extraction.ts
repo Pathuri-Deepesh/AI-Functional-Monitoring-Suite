@@ -23,7 +23,7 @@ export function extractFromResponse(args: {
   for (const ex of extractions) {
     if (!ex.saveAs || !ex.saveAs.trim()) continue;
 
-    let value: string | null = null;
+    let value: string | unknown[] | null = null;
 
     switch (ex.source) {
       case "body": {
@@ -37,7 +37,12 @@ export function extractFromResponse(args: {
         }
         if (parsedBody !== null) {
           const v = jsonPath(parsedBody, ex.path);
-          if (v != null) value = typeof v === "string" ? v : JSON.stringify(v);
+          if (v != null) {
+            // Arrays are kept as JS arrays (for-each iteration source).
+            // Objects are JSON-stringified so legacy scalar consumers still work.
+            if (Array.isArray(v)) value = v;
+            else value = typeof v === "string" ? v : JSON.stringify(v);
+          }
         }
         break;
       }
@@ -70,10 +75,14 @@ export function extractFromResponse(args: {
  *   - $.items[0]     → numeric array index
  *   - $.items[0].id  → mixed
  *   - $['some key']  → bracket notation with quoted key (single or double quotes)
+ *   - $.items[*]     → wildcard: returns every element as an array (Phase 1.18)
+ *   - $.items[*].id  → wildcard with continuation: returns an array of each element's `.id`
+ *   - $[*]           → applied directly to a top-level array
  *
- * Does NOT support: wildcards, slices, filter expressions, recursive descent.
- * This is intentional — keeps the implementation tiny and predictable.
+ * Does NOT support: slices, filter expressions, recursive descent (..).
  */
+const WILDCARD = Symbol("jsonPath:wildcard");
+
 export function jsonPath(obj: unknown, path: string): unknown {
   if (obj == null || !path) return undefined;
   let p = path.trim();
@@ -81,7 +90,7 @@ export function jsonPath(obj: unknown, path: string): unknown {
   if (p.startsWith("$.")) p = p.slice(2);
   else if (p.startsWith("$")) p = p.slice(1);
 
-  const tokens: Array<string | number> = [];
+  const tokens: Array<string | number | typeof WILDCARD> = [];
   let i = 0;
   while (i < p.length) {
     if (p[i] === ".") {
@@ -92,7 +101,9 @@ export function jsonPath(obj: unknown, path: string): unknown {
       const end = p.indexOf("]", i);
       if (end === -1) return undefined;
       const inside = p.slice(i + 1, end).trim();
-      if (
+      if (inside === "*") {
+        tokens.push(WILDCARD);
+      } else if (
         (inside.startsWith("'") && inside.endsWith("'")) ||
         (inside.startsWith('"') && inside.endsWith('"'))
       ) {
@@ -113,10 +124,25 @@ export function jsonPath(obj: unknown, path: string): unknown {
     }
   }
 
-  let cur: any = obj;
-  for (const t of tokens) {
+  return walk(obj, tokens, 0);
+}
+
+function walk(
+  cur: unknown,
+  tokens: Array<string | number | typeof WILDCARD>,
+  i: number
+): unknown {
+  for (; i < tokens.length; i++) {
     if (cur == null) return undefined;
-    cur = cur[t as keyof typeof cur];
+    const t = tokens[i];
+    if (t === WILDCARD) {
+      if (!Array.isArray(cur)) return undefined;
+      const rest = tokens.slice(i + 1);
+      if (rest.length === 0) return cur;
+      const mapped = cur.map((el) => walk(el, rest, 0));
+      return mapped;
+    }
+    cur = (cur as any)[t as keyof typeof cur];
   }
   return cur;
 }
@@ -124,10 +150,41 @@ export function jsonPath(obj: unknown, path: string): unknown {
 /**
  * Apply `{{variableName}}` substitution to a string. Unknown variables are left
  * untouched so the user can spot them in failure responses.
+ *
+ * Phase 1.18: `vars` may now contain object values (a for-each iteration item
+ * bound to its loop-local name). Templates like `{{student.id}}` walk the dotted
+ * path against the object. Flat lookup still wins when the exact key exists.
  */
-export function substitute(template: string, vars: Record<string, string>): string {
+export function substitute(
+  template: string,
+  vars: Record<string, unknown>
+): string {
   if (!template || template.indexOf("{{") === -1) return template;
-  return template.replace(/\{\{\s*([a-zA-Z_][\w.-]*)\s*\}\}/g, (_match, name) =>
-    vars[name] != null ? vars[name] : `{{${name}}}`
-  );
+  return template.replace(/\{\{\s*([a-zA-Z_][\w.-]*)\s*\}\}/g, (_match, name) => {
+    const resolved = resolveVar(vars, name);
+    return resolved != null ? toScalar(resolved) : `{{${name}}}`;
+  });
+}
+
+function resolveVar(vars: Record<string, unknown>, name: string): unknown {
+  // Flat lookup wins — preserves pre-1.18 behavior for non-dotted names
+  // and for scalar vars whose keys happen to contain dots.
+  if (Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null) {
+    return vars[name];
+  }
+  // Dotted walk: e.g. "student.id" → vars["student"] then .id.
+  const parts = name.split(".");
+  if (parts.length < 2) return undefined;
+  let cur: any = vars[parts[0]];
+  for (let i = 1; i < parts.length; i++) {
+    if (cur == null) return undefined;
+    cur = cur[parts[i]];
+  }
+  return cur;
+}
+
+function toScalar(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return JSON.stringify(v);
 }

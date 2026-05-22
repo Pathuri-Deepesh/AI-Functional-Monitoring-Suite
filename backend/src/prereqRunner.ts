@@ -284,8 +284,10 @@ async function executeRun(
     const outcome = await executeStep(resolved, variables, runId);
 
     // Stash into the in-run variables map and persist to the project pool with TTL.
+    // Phase 1.18: ev.value may be an array (from a `[*]` JSONPath extract) — JSON-stringify
+    // it for the string-typed project variable pool.
     for (const ev of outcome.extractedValues) {
-      variables[ev.saveAs] = ev.value;
+      variables[ev.saveAs] = typeof ev.value === "string" ? ev.value : JSON.stringify(ev.value);
     }
     for (const ex of step.extractions) {
       if ((ex.ttlSeconds ?? 0) > 0 && variables[ex.saveAs] != null) {

@@ -171,6 +171,27 @@
 - [x] **16.22** Prereq banner now shows live `Step N of M` + completed count + retry chip + filling progress bar — *2026-05-22*
 - [x] **16.23** FlowCard "Run now" lifts the prereq runId so `PrereqsPanel` attaches and shows its full step-by-step progress UI (matching panel's own Run-now behaviour) — *2026-05-22*
 
+## Phase 1.18 — For-each step (dynamic-fleet iteration) ✅ Complete
+
+- [x] **18.1** Backend `types.ts`: new `ForEachConfig` interface + `forEach?: ForEachConfig | null` on `FlowStep` — *2026-05-22*
+- [x] **18.2** Backend `types.ts`: `iterationIndex` + `iterationCount` on `StepResult`; `forEachIteration` + `forEachTotal` on `LiveStepProgress` — *2026-05-22*
+- [x] **18.3** Backend `extraction.ts`: `jsonPath()` learns `[*]` wildcard (recursive flatten); `ExtractedValue.value` widened to `string \| unknown[]` — *2026-05-22*
+- [x] **18.4** Backend `extraction.ts`: `substitute()` learns dotted-path lookup (`{{student.id}}` walks object-typed vars) — *2026-05-22*
+- [x] **18.5** Backend `db.ts`: idempotent migrations — `for_each_config_json` on flow_steps, `iteration_index` + `iteration_count` on step_results — *2026-05-22*
+- [x] **18.6** Backend `store.ts`: `normalizeForEach` (identifier validation) + `assertSingleForEach` (single-level guard) + serialize/parse in add/update/copy/move — *2026-05-22*
+- [x] **18.7** Backend `store.ts`: `recordStepResult` writes `iterationIndex` + `iterationCount`; `rowToFlowStep` + `rowToStepResult` parse them back — *2026-05-22*
+- [x] **18.8** Backend `flowRunner.ts`: iteration fork — resolves array var, caps at 100, loops once per element with `{ ...vars, [itemVarName]: item }`, records per-iteration row, never stops the flow on iteration failure — *2026-05-22*
+- [x] **18.9** Backend `flowRunner.ts`: LiveStepProgress publishes `forEachIteration` / `forEachTotal` between iterations — *2026-05-22*
+- [x] **18.10** Backend `flowRunner.ts` + `assertions.ts` + `prereqRunner.ts`: widen `vars` map from `Record<string,string>` to `Record<string,unknown>` (with stringify on persistence) — *2026-05-22*
+- [x] **18.11** Frontend `types.ts`: mirror backend (`ForEachConfig`, `FlowStep.forEach`, `StepResult.iteration*`, `LiveStepProgress.forEach*`) — *2026-05-22*
+- [x] **18.12** Frontend `flowForms.tsx`: new **For each** tab with dropdown of array-typed vars (auto-derived from earlier-step extractions whose JSONPath has `[*]`) + item-name input + Disable button + single-level warning banner — *2026-05-22*
+- [x] **18.13** Frontend `FlowCard.tsx`: `⟳ for each {{item}}` pill in the step header next to the method tag — *2026-05-22*
+- [x] **18.14** Frontend `FlowCard.tsx`: result row replaces latency chip with `(N) ✓ X / ✗ Y` summary chip when iterating; chevron toggles a vertical scrollable iterations panel (per-row status + latency + error reason + retry count) — *2026-05-22*
+- [x] **18.15** Frontend `FlowCard.tsx`: live progress label gets `— iteration X of N` suffix when `liveStep.forEachTotal` is set — *2026-05-22*
+- [x] **18.16** Frontend `varRefs.ts`: regex widened to recognise `{{name.dotted.path}}` (captures root); `checkStepVarRefs` adds the step's own `forEach.itemVarName` to the known set so loop-locals don't false-warn — *2026-05-22*
+- [x] **18.17** Frontend `styles.css`: `.step-foreach-pill` (indigo), `.step-iterations-summary` (green/red w/ chevron), `.step-iterations-panel` + `.step-iterations-row` (scrollable list), `.step-foreach-warning` (yellow banner) — *2026-05-22*
+- [x] **18.18** Build clean: `npx tsc -b` on backend + `npx tsc -b && npx vite build` on frontend — *2026-05-22*
+
 ## Phase 1.17 — Step orchestration (reorder + move/copy) ✅ Complete
 
 - [x] **17.1** Backend: `copyFlowStepToFlow` + `moveFlowStepToFlow` store fns — transactional, shift target positions +1, insert at pos=1, rebalance source on move — *2026-05-22*
@@ -226,6 +247,16 @@
 ---
 
 ## Recent activity
+
+### 2026-05-22 — Phase 1.18 For-each iteration (18 items)
+- **Why it matters for a monitoring tool:** a flow can now monitor a *dynamic fleet*. A single step `GET /students/{{student.id}}/grades` runs once per element of an array captured by an earlier step. When a new student is added to the DB tomorrow, that student is automatically included — no flow edit required. And when student #37 breaks, the result is `(50) ✓ 49 / ✗ 1` with a chevron-expandable per-iteration breakdown instead of one opaque 500.
+- **Backend:** new `for_each_config_json` column on `flow_steps` + new `iteration_index` / `iteration_count` columns on `step_results` (idempotent `ensureColumn` migrations). `jsonPath()` learns the `[*]` wildcard so an extraction like `$.data[*]` returns the whole array (kept in-memory as a JS array, JSON-stringified when persisted to `flow_runs.variables_json` / `variable_cache`). `substitute()` learns dotted-path lookup so `{{student.id}}` walks an object-typed loop variable.
+- **Runner fork:** flowRunner branches after substitution — if the step has `forEach`, resolves the array var, hard-caps at 100, and loops once per element with a per-iteration `{ ...vars, [itemVarName]: item }` map. Each iteration is its own `step_results` row (with `iteration_index` 0..N-1 and `iteration_count = N` on every row). Iteration failures never stop the flow — overall step `ok` is the AND of `statusOk + assertions + at-least-one-iter-passed` but the flow still progresses (`stopOnFailure` semantics applied at the step level, not the iteration level).
+- **Guardrails:** server-side single-level guard — `assertSingleForEach` rejects a 2nd for-each in the same flow with a 400. Identifier validation on both `arrayVarName` + `itemVarName`. Empty source array writes a single sentinel `skipped=true` row so the UI shows "for-each over empty array" instead of a silent gap. Missing/non-array variable writes one failed row with reason `forEach: variable 'x' is not an array` — does not crash the flow.
+- **Frontend editor:** new **For each** tab in the step editor (between Extract and Retry). Dropdown auto-derives candidates from earlier steps' extractions that use `[*]` in the JSONPath. Yellow banner when another step already has for-each enabled (single-level enforced both client-side + server-side). One-click Disable button.
+- **Frontend results:** `⟳ for each {{student}}` indigo pill in the step header. When iterating, the result row replaces the single latency chip with a `(50) ✓ 47 / ✗ 3` summary chip that toggles a vertical scrollable panel of per-iteration rows (#1 ✓ 200 134ms, #2 ✗ 404 …). `⚠ truncated to 100` chip surfaces when the source array had more than 100 elements.
+- **Frontend progress:** live mid-flight label gets `— iteration X of N` suffix while iterating. `varRefs.ts` regex now matches dotted refs and treats the loop-local `itemVarName` as known, so `{{student.id}}` doesn't trigger a false-warning chip.
+- **What's NOT in v1 (intentional):** nested for-each (single-level guard); static array / CSV-upload source (array must come from a prior step's response); user-configurable cap (hardcoded 100); parallel iterations (all serial for cleaner error attribution); extracting variables OUT of iterations (results are terminal — they're persisted and rendered but don't feed the global `variables` map).
 
 ### 2026-05-22 — Step orchestration follow-ups (3 fixes)
 - **Move/Copy target auto-refreshes**: receiving FlowCard now pulls fresh `detail` immediately instead of needing a manual reload. ProjectView combines its `flowsTick` into the `refreshTick` passed to each FlowCard, so any flow-list mutation also re-fetches every card's step list.

@@ -296,6 +296,11 @@ function initSchema(d: DatabaseSync): void {
   ensureColumn(d, "projects", "prereq_interval_minutes", "prereq_interval_minutes INTEGER NOT NULL DEFAULT 30");
   ensureColumn(d, "projects", "prereq_enabled", "prereq_enabled INTEGER NOT NULL DEFAULT 1");
   ensureColumn(d, "projects", "prereq_last_run_at", "prereq_last_run_at INTEGER");
+
+  // Phase 1.18 — for-each iteration
+  ensureColumn(d, "flow_steps", "for_each_config_json", "for_each_config_json TEXT");
+  ensureColumn(d, "step_results", "iteration_index", "iteration_index INTEGER");
+  ensureColumn(d, "step_results", "iteration_count", "iteration_count INTEGER");
 }
 
 function migrateFromJsonIfNeeded(d: DatabaseSync): void {

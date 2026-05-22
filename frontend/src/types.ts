@@ -158,6 +158,17 @@ export interface Extraction {
   ttlSeconds?: number | null;
 }
 
+/**
+ * Phase 1.18 — for-each iteration over a prior step's array response.
+ * When set on a FlowStep, the step runs once per element of `arrayVarName`
+ * (capped at 100 server-side). The current element is bound to `itemVarName`
+ * so templates like `{{student.id}}` resolve per iteration.
+ */
+export interface ForEachConfig {
+  arrayVarName: string;
+  itemVarName: string;
+}
+
 export interface FlowStep {
   id: string;
   flowId: string;
@@ -176,6 +187,8 @@ export interface FlowStep {
   waitBeforeMs: number;
   maxRetries: number;
   retryBackoffMs: number;
+  /** Phase 1.18 — when set, this step iterates over the named array variable. */
+  forEach: ForEachConfig | null;
 }
 
 export interface Flow {
@@ -198,7 +211,11 @@ export interface FlowWithSteps extends Flow {
 
 export interface ExtractedValue {
   saveAs: string;
-  value: string;
+  /**
+   * String for scalar extractions; array for `[*]` wildcard extractions (Phase 1.18).
+   * Persisted as JSON when serialized.
+   */
+  value: string | unknown[];
   fromCache: boolean;
 }
 
@@ -218,6 +235,12 @@ export interface StepResult {
   skipReason: string | null;
   ok: boolean;
   checkedAt: number;
+  /**
+   * Phase 1.18 — non-null on iteration rows of a for-each step. `iterationIndex`
+   * is 0..N-1; `iterationCount` is N (the same on every row of the same iteration set).
+   */
+  iterationIndex: number | null;
+  iterationCount: number | null;
 }
 
 /**
@@ -234,6 +257,10 @@ export interface LiveStepProgress {
   lastErrorReason: string | null;
   phase: "executing" | "backoff";
   nextRetryAtMs: number | null;
+  /** Phase 1.18 — 1-indexed iteration counter during a for-each step. null when not iterating. */
+  forEachIteration?: number | null;
+  /** Phase 1.18 — total iterations being run (already clamped to the 100 cap). */
+  forEachTotal?: number | null;
 }
 
 export interface FlowRun {

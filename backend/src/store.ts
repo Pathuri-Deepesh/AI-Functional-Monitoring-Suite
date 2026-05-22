@@ -13,6 +13,7 @@ import type {
   FlowStats,
   FlowStep,
   FlowWithSteps,
+  ForEachConfig,
   HttpMethod,
   KeyValue,
   MonitoredUrl,
@@ -603,6 +604,7 @@ interface FlowStepRow {
   wait_before_ms: number;
   max_retries: number;
   retry_backoff_ms: number;
+  for_each_config_json: string | null;
 }
 
 interface FlowRunRow {
@@ -637,6 +639,8 @@ interface StepResultRow {
   skip_reason: string | null;
   ok: number;
   checked_at: number;
+  iteration_index: number | null;
+  iteration_count: number | null;
 }
 
 function rowToFlow(r: FlowRow & { last_run_ok?: number | null; last_run_total_ms?: number | null }): Flow {
@@ -676,6 +680,7 @@ function rowToFlowStep(r: FlowStepRow): FlowStep {
     waitBeforeMs: r.wait_before_ms,
     maxRetries: r.max_retries,
     retryBackoffMs: r.retry_backoff_ms,
+    forEach: r.for_each_config_json ? safeParse<ForEachConfig | null>(r.for_each_config_json, null) : null,
   };
 }
 
@@ -717,6 +722,8 @@ function rowToStepResult(r: StepResultRow): StepResult {
     skipReason: r.skip_reason,
     ok: r.ok === 1,
     checkedAt: r.checked_at,
+    iterationIndex: r.iteration_index,
+    iterationCount: r.iteration_count,
   };
 }
 
@@ -834,6 +841,43 @@ export function getFlowStep(id: string): FlowStep | undefined {
   return row ? rowToFlowStep(row) : undefined;
 }
 
+const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
+/**
+ * Phase 1.18: normalize+validate a ForEachConfig payload, or return null.
+ * Throws on partial/invalid input so the user gets immediate API feedback.
+ */
+function normalizeForEach(raw: unknown): ForEachConfig | null {
+  if (raw == null) return null;
+  if (typeof raw !== "object") throw new Error("forEach must be an object");
+  const arrayVarName = String((raw as any).arrayVarName ?? "").trim();
+  const itemVarName = String((raw as any).itemVarName ?? "").trim();
+  if (!arrayVarName && !itemVarName) return null;
+  if (!IDENT_RE.test(arrayVarName)) {
+    throw new Error("forEach.arrayVarName must be a valid identifier");
+  }
+  if (!IDENT_RE.test(itemVarName)) {
+    throw new Error("forEach.itemVarName must be a valid identifier");
+  }
+  return { arrayVarName, itemVarName };
+}
+
+/**
+ * Phase 1.18 single-level guard: a flow may have at most one for-each step.
+ * `excludeStepId` lets updateFlowStep skip the step being patched.
+ */
+function assertSingleForEach(flowId: string, excludeStepId: string | null): void {
+  const rows = db()
+    .prepare("SELECT id, for_each_config_json FROM flow_steps WHERE flow_id = ?")
+    .all(flowId) as Array<{ id: string; for_each_config_json: string | null }>;
+  for (const r of rows) {
+    if (r.id === excludeStepId) continue;
+    if (r.for_each_config_json && r.for_each_config_json !== "null") {
+      throw new Error("only one for-each step is allowed per flow");
+    }
+  }
+}
+
 export function addFlowStep(input: {
   flowId: string;
   url: string;
@@ -850,6 +894,7 @@ export function addFlowStep(input: {
   waitBeforeMs?: number;
   maxRetries?: number;
   retryBackoffMs?: number;
+  forEach?: ForEachConfig | null;
 }): FlowStep {
   const flow = getFlow(input.flowId);
   if (!flow) throw new Error("Flow not found");
@@ -867,6 +912,9 @@ export function addFlowStep(input: {
     throw new Error("DELETE method is not allowed for safety");
   }
 
+  const forEach = normalizeForEach(input.forEach);
+  if (forEach) assertSingleForEach(input.flowId, null);
+
   // Next position = current max + 1
   const maxRow = db()
     .prepare("SELECT MAX(position) AS m FROM flow_steps WHERE flow_id = ?")
@@ -878,8 +926,8 @@ export function addFlowStep(input: {
     .prepare(
       `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                api_key_id, assertions_json, custom_headers_json, query_params_json,
-                               extractions_json, wait_before_ms, max_retries, retry_backoff_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                               extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -898,7 +946,8 @@ export function addFlowStep(input: {
       JSON.stringify(input.extractions ?? []),
       Math.max(0, Math.min(60_000, Number(input.waitBeforeMs ?? 0))),
       Math.max(0, Math.min(5, Number(input.maxRetries ?? 0))),
-      Math.max(100, Math.min(30_000, Number(input.retryBackoffMs ?? 1000)))
+      Math.max(100, Math.min(30_000, Number(input.retryBackoffMs ?? 1000))),
+      forEach ? JSON.stringify(forEach) : null
     );
   return getFlowStep(id)!;
 }
@@ -920,6 +969,7 @@ export function updateFlowStep(
     waitBeforeMs: number;
     maxRetries: number;
     retryBackoffMs: number;
+    forEach: ForEachConfig | null;
   }>
 ): FlowStep | undefined {
   const existing = getFlowStep(id);
@@ -927,12 +977,22 @@ export function updateFlowStep(
   if ((patch.method as string) === "DELETE") {
     throw new Error("DELETE method is not allowed for safety");
   }
+
+  // forEach: if the caller passed the key, use the normalized value (which may be null
+  // to clear it). If the key was not in the patch, keep what's already stored.
+  const forEachProvided = Object.prototype.hasOwnProperty.call(patch, "forEach");
+  const nextForEach = forEachProvided
+    ? normalizeForEach(patch.forEach)
+    : existing.forEach ?? null;
+  if (nextForEach) assertSingleForEach(existing.flowId, id);
+
   db()
     .prepare(
       `UPDATE flow_steps
        SET description = ?, url = ?, method = ?, body_type = ?, body = ?, body_content_type = ?,
            api_key_id = ?, assertions_json = ?, custom_headers_json = ?, query_params_json = ?,
-           extractions_json = ?, wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?
+           extractions_json = ?, wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?,
+           for_each_config_json = ?
        WHERE id = ?`
     )
     .run(
@@ -950,6 +1010,7 @@ export function updateFlowStep(
       Math.max(0, Math.min(60_000, Number(patch.waitBeforeMs ?? existing.waitBeforeMs))),
       Math.max(0, Math.min(5, Number(patch.maxRetries ?? existing.maxRetries))),
       Math.max(100, Math.min(30_000, Number(patch.retryBackoffMs ?? existing.retryBackoffMs))),
+      nextForEach ? JSON.stringify(nextForEach) : null,
       id
     );
   return getFlowStep(id);
@@ -992,8 +1053,8 @@ function insertStepCopyAtTop(targetFlowId: string, source: FlowStep): FlowStep {
       .prepare(
         `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                  api_key_id, assertions_json, custom_headers_json, query_params_json,
-                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         newId,
@@ -1011,7 +1072,8 @@ function insertStepCopyAtTop(targetFlowId: string, source: FlowStep): FlowStep {
         JSON.stringify(source.extractions),
         source.waitBeforeMs,
         source.maxRetries,
-        source.retryBackoffMs
+        source.retryBackoffMs,
+        source.forEach ? JSON.stringify(source.forEach) : null
       );
   });
   return getFlowStep(newId)!;
@@ -1022,6 +1084,8 @@ export function copyFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
   if (!source) throw new Error("Source step not found");
   const target = getFlow(targetFlowId);
   if (!target) throw new Error("Target flow not found");
+  // Phase 1.18: refuse if source has forEach and target already has a forEach step
+  if (source.forEach) assertSingleForEach(targetFlowId, null);
   return insertStepCopyAtTop(targetFlowId, source);
 }
 
@@ -1033,6 +1097,8 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
   }
   const target = getFlow(targetFlowId);
   if (!target) throw new Error("Target flow not found");
+  // Phase 1.18: refuse if source has forEach and target already has a forEach step
+  if (source.forEach) assertSingleForEach(targetFlowId, null);
 
   const sourceFlowId = source.flowId;
   const sourcePosition = source.position;
@@ -1047,8 +1113,8 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
       .prepare(
         `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                  api_key_id, assertions_json, custom_headers_json, query_params_json,
-                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         newId,
@@ -1066,7 +1132,8 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
         JSON.stringify(source.extractions),
         source.waitBeforeMs,
         source.maxRetries,
-        source.retryBackoffMs
+        source.retryBackoffMs,
+        source.forEach ? JSON.stringify(source.forEach) : null
       );
     // Delete source + rebalance source flow so positions stay contiguous
     db().prepare("DELETE FROM flow_steps WHERE id = ?").run(stepId);
@@ -1130,14 +1197,16 @@ export function recordStepResult(args: {
   skipped: boolean;
   skipReason: string | null;
   ok: boolean;
+  iterationIndex?: number | null;
+  iterationCount?: number | null;
 }): void {
   db()
     .prepare(
       `INSERT INTO step_results (id, flow_run_id, step_id, position, status_code, status_group, error_reason,
                                   dns_ms, tcp_ms, tls_ms, ttfb_ms, download_ms, total_ms,
                                   assertion_results_json, extracted_values_json, attempts, skipped, skip_reason,
-                                  ok, checked_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                  ok, checked_at, iteration_index, iteration_count)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       randomUUID(),
@@ -1159,7 +1228,9 @@ export function recordStepResult(args: {
       args.skipped ? 1 : 0,
       args.skipReason,
       args.ok ? 1 : 0,
-      Date.now()
+      Date.now(),
+      args.iterationIndex ?? null,
+      args.iterationCount ?? null
     );
 }
 
@@ -1345,6 +1416,9 @@ function rowToPrereqStepResult(r: PrereqStepResultRow): StepResult {
     skipReason: r.skip_reason,
     ok: r.ok === 1,
     checkedAt: r.checked_at,
+    // Prereq steps never iterate (Phase 1.18 single-level constraint applies to flows only).
+    iterationIndex: null,
+    iterationCount: null,
   };
 }
 

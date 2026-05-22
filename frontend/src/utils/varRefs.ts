@@ -1,6 +1,9 @@
 import type { Extraction, FlowStep, KeyValue, PrereqStep } from "../types";
 
-const VAR_RX = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
+// Matches {{name}} or {{name.dotted.path}} — captures the ROOT identifier
+// (everything before the first dot). Mirrors the backend's tolerant lookup so
+// `{{student.id}}` is recognized as a reference to `student`.
+const VAR_RX = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*\}\}/g;
 
 export function findVarRefs(text: string | undefined | null): string[] {
   if (!text) return [];
@@ -55,5 +58,11 @@ export function checkStepVarRefs(
   const refs = stepVarRefs(step);
   if (refs.length === 0) return [];
   const known = new Set<string>([...projectVarNames, ...extractionsBefore(earlierSteps)]);
+  // Phase 1.18: if this step iterates, its loop-local item name is in scope
+  // (even though no earlier step "extracts" it). `{{student.id}}` resolves to
+  // a field of the per-iteration item — the root `student` should be known.
+  if ("forEach" in step && step.forEach && step.forEach.itemVarName.trim()) {
+    known.add(step.forEach.itemVarName.trim());
+  }
   return refs.filter((r) => !known.has(r));
 }

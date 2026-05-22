@@ -19,6 +19,7 @@ import type {
   Flow,
   FlowStep,
   FlowWithSteps,
+  ForEachConfig,
   HttpMethod,
   KeyValue,
   PrereqStep,
@@ -148,7 +149,7 @@ export function FlowEditorForm(props: BaseProps & { project: Project; flow?: Flo
 // =============================================================
 // Add / edit a single Step inside a flow
 // =============================================================
-type StepTab = "basics" | "params" | "headers" | "body" | "assertions" | "extract" | "retry";
+type StepTab = "basics" | "params" | "headers" | "body" | "assertions" | "extract" | "forEach" | "retry";
 
 export function StepEditorForm(
   props: BaseProps & {
@@ -174,6 +175,7 @@ export function StepEditorForm(
   const [waitBeforeMs, setWaitBeforeMs] = useState(step?.waitBeforeMs ?? 0);
   const [maxRetries, setMaxRetries] = useState(step?.maxRetries ?? 0);
   const [retryBackoffMs, setRetryBackoffMs] = useState(step?.retryBackoffMs ?? 1000);
+  const [forEach, setForEach] = useState<ForEachConfig | null>(step?.forEach ?? null);
   const [tab, setTab] = useState<StepTab>("basics");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -196,6 +198,27 @@ export function StepEditorForm(
       if (step && s.id === step.id) break;
       for (const ex of s.extractions) {
         if (ex.saveAs.trim()) list.push({ name: ex.saveAs, from: `step ${s.position}` });
+      }
+    }
+    return list;
+  })();
+
+  // Phase 1.18 — for-each support data
+  // (a) is some OTHER step in the flow already a for-each step? (single-level guard)
+  // (b) candidate array variables (extractions whose JSONPath uses `[*]`)
+  const otherForEachStep = flow.steps.find(
+    (s) => (!step || s.id !== step.id) && s.forEach != null
+  );
+  const arrayVarCandidates = (() => {
+    const list: { name: string; from: string }[] = [];
+    for (const s of flow.steps) {
+      if (step && s.id === step.id) break;
+      for (const ex of s.extractions) {
+        if (!ex.saveAs.trim()) continue;
+        if (ex.source !== "body") continue;
+        if (ex.path.includes("[*]")) {
+          list.push({ name: ex.saveAs, from: `step ${s.position}` });
+        }
       }
     }
     return list;
@@ -225,6 +248,13 @@ export function StepEditorForm(
         waitBeforeMs,
         maxRetries,
         retryBackoffMs,
+        forEach:
+          forEach && forEach.arrayVarName.trim() && forEach.itemVarName.trim()
+            ? {
+                arrayVarName: forEach.arrayVarName.trim(),
+                itemVarName: forEach.itemVarName.trim(),
+              }
+            : null,
       };
       if (editing) {
         await updateFlowStep(step!.id, payload);
@@ -265,6 +295,9 @@ export function StepEditorForm(
         </Tab>
         <Tab name="extract" current={tab} setTab={setTab}>
           Extract{extractCount > 0 ? ` (${extractCount})` : ""}
+        </Tab>
+        <Tab name="forEach" current={tab} setTab={setTab}>
+          For each{forEach ? " ⟳" : ""}
         </Tab>
         <Tab name="retry" current={tab} setTab={setTab}>
           Retry / Wait
@@ -358,6 +391,20 @@ export function StepEditorForm(
 
       {tab === "extract" && (
         <ExtractionsEditor extractions={extractions} setExtractions={setExtractions} />
+      )}
+
+      {tab === "forEach" && (
+        <ForEachEditor
+          forEach={forEach}
+          setForEach={setForEach}
+          arrayVarCandidates={arrayVarCandidates}
+          locked={!!otherForEachStep}
+          lockedReason={
+            otherForEachStep
+              ? `Step ${otherForEachStep.position} in this flow already has for-each enabled (only one per flow).`
+              : null
+          }
+        />
       )}
 
       {tab === "retry" && (
@@ -478,6 +525,128 @@ function ExtractionsEditor(props: { extractions: Extraction[]; setExtractions: (
       <button type="button" className="ghost small" style={{ marginTop: 8 }} onClick={add}>
         + Add extraction
       </button>
+    </>
+  );
+}
+
+// =============================================================
+// For-each editor (Phase 1.18)
+// =============================================================
+function ForEachEditor(props: {
+  forEach: ForEachConfig | null;
+  setForEach: (v: ForEachConfig | null) => void;
+  arrayVarCandidates: { name: string; from: string }[];
+  locked: boolean;
+  lockedReason: string | null;
+}) {
+  const { forEach, setForEach, arrayVarCandidates, locked, lockedReason } = props;
+  const enabled = forEach != null;
+
+  function enable() {
+    setForEach({
+      arrayVarName: arrayVarCandidates[0]?.name ?? "",
+      itemVarName: "item",
+    });
+  }
+  function update(patch: Partial<ForEachConfig>) {
+    if (!forEach) return;
+    setForEach({ ...forEach, ...patch });
+  }
+
+  return (
+    <>
+      <p className="sub small">
+        Run this step once per element of an array captured by an earlier step. Useful for monitoring
+        a dynamic fleet — e.g. <code>{`GET /students`}</code> → <code>{`GET /students/{{student.id}}/grades`}</code> per student.
+      </p>
+
+      {locked && (
+        <div className="step-foreach-warning">
+          ⚠ {lockedReason}
+        </div>
+      )}
+
+      {!enabled && (
+        <div className="empty-inline" style={{ flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
+          <span>For-each is off. This step runs exactly once per flow run.</span>
+          <button
+            type="button"
+            className="ghost small"
+            onClick={enable}
+            disabled={locked}
+          >
+            + Enable for-each
+          </button>
+        </div>
+      )}
+
+      {enabled && forEach && (
+        <>
+          <Field
+            label="Iterate over variable"
+            hint="Pick an array variable extracted by an earlier step (its JSONPath should use [*])."
+          >
+            {arrayVarCandidates.length > 0 ? (
+              <select
+                value={forEach.arrayVarName}
+                onChange={(e) => update({ arrayVarName: e.target.value })}
+                disabled={locked}
+              >
+                <option value="">— select a variable —</option>
+                {arrayVarCandidates.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name} ({v.from})
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                placeholder="students"
+                value={forEach.arrayVarName}
+                onChange={(e) => update({ arrayVarName: e.target.value })}
+                disabled={locked}
+              />
+            )}
+          </Field>
+
+          {arrayVarCandidates.length === 0 && (
+            <div className="sub small" style={{ marginTop: -6 }}>
+              No array-typed variables detected yet. Add an extraction with a JSONPath like{" "}
+              <code>$.data[*]</code> in an earlier step, then come back here.
+            </div>
+          )}
+
+          <Field
+            label="Loop item name"
+            hint='Templates inside this step use {{name.field}} per iteration. Default "item".'
+          >
+            <input
+              type="text"
+              placeholder="student"
+              value={forEach.itemVarName}
+              onChange={(e) => update({ itemVarName: e.target.value })}
+              disabled={locked}
+            />
+          </Field>
+
+          <div className="sub small">
+            This step will run once per element of the array, up to a max of <strong>100</strong> iterations.
+            Failed iterations don't stop the flow — you'll see <code>N ok / M failed</code> on the result row.
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="ghost small destructive"
+              onClick={() => setForEach(null)}
+              disabled={locked}
+            >
+              Disable for-each
+            </button>
+          </div>
+        </>
+      )}
     </>
   );
 }

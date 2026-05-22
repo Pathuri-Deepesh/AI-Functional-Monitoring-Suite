@@ -11,7 +11,16 @@ import {
   runPrereqsAsync,
 } from "../api";
 import { Spinner } from "./Spinner";
-import type { Flow, FlowRun, FlowStep, FlowWithSteps, LiveStepProgress, StatusGroup, StepResult } from "../types";
+import type {
+  Flow,
+  FlowRun,
+  FlowStep,
+  FlowWithSteps,
+  ForEachConfig,
+  LiveStepProgress,
+  StatusGroup,
+  StepResult,
+} from "../types";
 import { checkStepVarRefs } from "../utils/varRefs";
 import { MoveCopyStepModal } from "./MoveCopyStepModal";
 
@@ -335,6 +344,14 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
               {runningStepPosition != null
                 ? `Step ${runningStepPosition} of ${totalSteps}`
                 : `Wrapping up step ${totalSteps} of ${totalSteps}`}
+              {live?.forEachTotal != null && live.forEachIteration != null && (
+                <>
+                  {" — iteration "}
+                  <strong>
+                    {live.forEachIteration} of {live.forEachTotal}
+                  </strong>
+                </>
+              )}
               {isRetrying && live ? (
                 <>
                   {" — "}
@@ -390,7 +407,16 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
                   .slice()
                   .sort((a, b) => a.position - b.position)
                   .map((step, idx, arr) => {
-                    const result = displayRun?.stepResults.find((r) => r.stepId === step.id);
+                    const allResults =
+                      displayRun?.stepResults.filter((r) => r.stepId === step.id) ?? [];
+                    // For non-iterating steps there's exactly one row; for for-each
+                    // steps the "headline" result is the first iteration row.
+                    const result = allResults[0] ?? null;
+                    const iterationResults = step.forEach
+                      ? allResults
+                          .filter((r) => r.iterationIndex != null)
+                          .sort((a, b) => (a.iterationIndex ?? 0) - (b.iterationIndex ?? 0))
+                      : [];
                     const isRunningStep = running && runningStepPosition === step.position;
                     const isQueued = running && !result && !isRunningStep;
                     const earlier = arr.slice(0, idx);
@@ -403,7 +429,9 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
                         url={step.url}
                         description={step.description}
                         extractions={step.extractions.map((e) => e.saveAs).filter(Boolean)}
-                        result={result ?? null}
+                        forEach={step.forEach}
+                        iterationResults={iterationResults}
+                        result={result}
                         runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
                         liveAttempt={isRunningStep ? live : null}
                         canMoveUp={idx > 0 && !running}
@@ -441,6 +469,8 @@ function StepRow(props: {
   url: string;
   description: string;
   extractions: string[];
+  forEach: ForEachConfig | null;
+  iterationResults: StepResult[];
   result: StepResult | null;
   runState?: "idle" | "running" | "queued";
   liveAttempt?: LiveStepProgress | null;
@@ -460,6 +490,8 @@ function StepRow(props: {
     url,
     description,
     extractions,
+    forEach,
+    iterationResults,
     result,
     runState = "idle",
     liveAttempt,
@@ -473,6 +505,15 @@ function StepRow(props: {
     disableActions,
     onClick,
   } = props;
+  const [iterationsOpen, setIterationsOpen] = useState(false);
+  // Iteration summary derived from per-iteration step_results rows.
+  // `iterationCount` is the same across every row of the same iteration set —
+  // pick the first to learn the planned total (the actual rendered count may
+  // be smaller if the run is still in-flight).
+  const iterating = forEach != null && iterationResults.length > 0;
+  const iterTotal = iterating ? iterationResults[0].iterationCount ?? iterationResults.length : 0;
+  const iterOk = iterationResults.filter((r) => r.ok).length;
+  const iterFailed = iterationResults.length - iterOk;
   const ok = result?.ok ?? null;
   const skipped = result?.skipped ?? false;
   const isRetry = !!liveAttempt && liveAttempt.attempt > 1;
@@ -534,6 +575,14 @@ function StepRow(props: {
         <div className="step-line">
           <span className={`pill ${statusClass}`}>{pillText}</span>
           <span className={`method-tag ${METHOD_COLOR[method] ?? "method-get"}`}>{method}</span>
+          {forEach && (
+            <span
+              className="step-foreach-pill"
+              title={`Runs once per element of {{${forEach.arrayVarName}}}, exposed as {{${forEach.itemVarName}}}`}
+            >
+              ⟳ for each {`{{${forEach.itemVarName}}}`}
+            </span>
+          )}
           <span className="url-link" style={{ borderBottom: "none", color: "var(--text)" }}>
             {url}
           </span>
@@ -561,7 +610,7 @@ function StepRow(props: {
             )}
           </div>
         )}
-        {result && (
+        {result && !iterating && (
           <div className="step-result-meta">
             {result.timings.totalMs != null && (
               <span className="meta-chip">⏱ {result.timings.totalMs}ms</span>
@@ -585,6 +634,62 @@ function StepRow(props: {
                 {result.extractedValues.some((e) => e.fromCache) && " (cached)"}
               </span>
             )}
+          </div>
+        )}
+        {iterating && (
+          <div className="step-result-meta">
+            <button
+              type="button"
+              className={`step-iterations-summary ${iterFailed > 0 ? "has-failures" : "all-ok"}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setIterationsOpen((v) => !v);
+              }}
+              title={
+                iterFailed > 0
+                  ? `${iterFailed} iteration(s) failed — click to expand`
+                  : `All ${iterTotal} iterations succeeded — click to expand`
+              }
+            >
+              ({iterTotal}) ✓ {iterOk} / ✗ {iterFailed}
+              <span className="chevron" aria-hidden>{iterationsOpen ? "▴" : "▾"}</span>
+            </button>
+            {iterTotal >= 100 && (
+              <span
+                className="meta-chip warn"
+                title="The source array had more than 100 elements; only the first 100 were iterated."
+              >
+                ⚠ truncated to 100
+              </span>
+            )}
+          </div>
+        )}
+        {iterating && iterationsOpen && (
+          <div className="step-iterations-panel" onClick={(e) => e.stopPropagation()}>
+            {iterationResults.map((r) => {
+              const idx = (r.iterationIndex ?? 0) + 1;
+              const status = r.ok ? "ok" : "fail";
+              const code = r.statusCode ?? (r.errorReason ? "ERR" : "—");
+              return (
+                <div key={r.id} className={`step-iterations-row ${status}`}>
+                  <span className="iter-num">#{idx}</span>
+                  <span className={`iter-status ${r.ok ? "g-2xx" : "g-5xx"}`}>
+                    {r.ok ? "✓" : "✗"} {code}
+                  </span>
+                  {r.timings.totalMs != null && (
+                    <span className="iter-latency muted small">{r.timings.totalMs}ms</span>
+                  )}
+                  {r.errorReason && (
+                    <span className="iter-reason" title={r.errorReason}>
+                      {r.errorReason.slice(0, 80)}
+                    </span>
+                  )}
+                  {r.attempts > 1 && (
+                    <span className="iter-retry muted small">🔁 {r.attempts}×</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         {!result && extractions.length > 0 && (
