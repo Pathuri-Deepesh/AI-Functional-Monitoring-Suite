@@ -169,6 +169,7 @@
 - [x] **16.20** Fix: × button on selected file now deletes from project (not just unbinds from step) — *2026-05-21*
 - [x] **16.21** Replace native `window.confirm` for upload delete with two-click inline confirm (matches existing step-delete pattern) — *2026-05-21*
 - [x] **16.22** Prereq banner now shows live `Step N of M` + completed count + retry chip + filling progress bar — *2026-05-22*
+- [x] **16.23** FlowCard "Run now" lifts the prereq runId so `PrereqsPanel` attaches and shows its full step-by-step progress UI (matching panel's own Run-now behaviour) — *2026-05-22*
 
 ## Phase 1.9 — Postman parity ✅ Complete
 
@@ -209,6 +210,9 @@
 ---
 
 ## Recent activity
+
+### 2026-05-22 — Prereq progress UI continuity (1 item)
+- FlowCard's "Run now" now lifts its prereq `runId` up to ProjectView, which passes it to `PrereqsPanel` as `externalRunId`. The panel attaches via a new effect (re-using `handleRun` with the lifted id instead of starting a fresh chain), auto-expands, and shows the same complete progress bar + step-by-step rows that appear when the user clicks the panel's own "Run now". FlowCard keeps its inline banner for in-context feedback.
 
 ### Today 2026-05-21 — Binary uploads + Flow/Audit UX (19 items)
 - New `uploads` table + on-disk store; raw POST via `express.raw` (10MB cap, x-filename header)
