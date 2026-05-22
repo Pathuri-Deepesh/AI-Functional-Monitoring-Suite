@@ -35,10 +35,14 @@ interface Props {
   onEditStep: (stepId: string) => void;
   onDelete: () => void;
   onAfterRun?: () => void;
+  /** Notifies the parent (ProjectView) that we just started a prereq run, so
+   *  the PrereqsPanel above can mirror the full progress UI. Called with null
+   *  once the prereq phase finishes. */
+  onPrereqRunStarted?: (runId: string | null) => void;
   refreshTick: number;
 }
 
-export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfterRun, refreshTick }: Props) {
+export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfterRun, onPrereqRunStarted, refreshTick }: Props) {
   const [expanded, setExpanded] = useState(true);
   const [detail, setDetail] = useState<FlowWithSteps | null>(null);
   const [lastRun, setLastRun] = useState<FlowRun | null>(null);
@@ -91,6 +95,9 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
           setRunPhase("prereq");
           setPrereqProgress({ completed: 0, total: bundle.steps.length, live: null });
           const { runId: prereqRunId } = await runPrereqsAsync(flow.projectId, { force: true });
+          // Hand the runId up so PrereqsPanel can attach to it and surface the
+          // full step-by-step progress UI in parallel with our inline banner.
+          onPrereqRunStarted?.(prereqRunId);
           while (!abort.cancelled && Date.now() < deadline) {
             await new Promise((r) => setTimeout(r, POLL_MS));
             if (abort.cancelled) return;
@@ -143,6 +150,9 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
         setRunPhase(null);
         setActiveRun(null);
         setPrereqProgress(null);
+        // Clear the lifted runId so the parent doesn't keep PrereqsPanel
+        // attached after the flow itself finishes.
+        onPrereqRunStarted?.(null);
       }
     }
   }

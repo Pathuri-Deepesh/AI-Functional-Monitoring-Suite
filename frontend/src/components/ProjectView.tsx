@@ -64,6 +64,10 @@ export function ProjectView(props: Props) {
   const [sparklineByUrl, setSparklineByUrl] = useState<Record<string, SparklinePoint[]>>({});
   const [flows, setFlows] = useState<Flow[]>([]);
   const [flowsTick, setFlowsTick] = useState(0); // bumped when a flow runs; triggers a re-fetch
+  // When a FlowCard's "Run now" kicks off the prereq chain, this holds the
+  // runId so the PrereqsPanel above can attach to it and show the full
+  // step-by-step progress UI (not just FlowCard's inline banner).
+  const [externalPrereqRunId, setExternalPrereqRunId] = useState<string | null>(null);
   const [tab, setTab] = useState<SectionTab>(readTabFromHash);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -229,6 +233,7 @@ export function ProjectView(props: Props) {
         onAddStep={props.onAddPrereqStep}
         onEditStep={props.onEditPrereqStep}
         onAfterRun={() => setFlowsTick((t) => t + 1)}
+        externalRunId={externalPrereqRunId}
       />
 
       {/* ===== TAB NAV ===== */}
@@ -319,6 +324,7 @@ export function ProjectView(props: Props) {
             onEditStep={props.onEditStep}
             onDelete={props.onDeleteFlow}
             onAfterFlowRun={() => setFlowsTick((t) => t + 1)}
+            onPrereqRunStarted={setExternalPrereqRunId}
           />
         </div>
       )}
@@ -519,8 +525,9 @@ function FlowsSectionPanel(props: {
   onEditStep: (flow: Flow, stepId: string) => void;
   onDelete: (flow: Flow) => void;
   onAfterFlowRun: () => void;
+  onPrereqRunStarted: (runId: string | null) => void;
 }) {
-  const { flows, refreshTick, onCreate, onEdit, onAddStep, onEditStep, onDelete, onAfterFlowRun } = props;
+  const { flows, refreshTick, onCreate, onEdit, onAddStep, onEditStep, onDelete, onAfterFlowRun, onPrereqRunStarted } = props;
 
   // Flow-level aggregate stats
   const totalFlows = flows.length;
@@ -637,6 +644,7 @@ function FlowsSectionPanel(props: {
                   onEditStep={(stepId) => onEditStep(f, stepId)}
                   onDelete={() => onDelete(f)}
                   onAfterRun={onAfterFlowRun}
+                  onPrereqRunStarted={onPrereqRunStarted}
                   refreshTick={refreshTick}
                 />
               ))}

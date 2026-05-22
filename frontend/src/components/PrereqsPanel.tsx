@@ -35,9 +35,13 @@ interface Props {
   refreshTick: number;
   /** Bumped whenever the prereq chain runs — lets ProjectView re-load project vars. */
   onAfterRun?: () => void;
+  /** When a FlowCard's "Run now" kicks off a prereq run, the parent passes that
+   *  runId down so this panel can attach to the same run and surface the full
+   *  step-by-step progress UI (not just FlowCard's inline banner). */
+  externalRunId?: string | null;
 }
 
-export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAfterRun }: Props) {
+export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAfterRun, externalRunId }: Props) {
   const [bundle, setBundle] = useState<PrereqsBundle | null>(null);
   const [lastRun, setLastRun] = useState<PrereqRun | null>(null);
   /** Live run while the chain is executing — null otherwise. */
@@ -75,7 +79,7 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
     };
   }, [project.id]);
 
-  async function handleRun() {
+  async function handleRun(opts?: { runId?: string }) {
     // Remember the user's pre-click expansion state so we can restore it after
     expandedBeforeRun.current = expanded;
     setRunning(true);
@@ -85,8 +89,10 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
     pollAbort.current = abort;
     const deadline = Date.now() + POLL_TIMEOUT_MS;
     try {
-      // force=true → manual Run-now click bypasses the TTL skip-cache
-      const { runId } = await runPrereqsAsync(project.id, { force: true });
+      // If the parent already kicked off the run (FlowCard's "Run now"), attach
+      // to that runId. Otherwise start a fresh one — force=true bypasses TTL.
+      const runId = opts?.runId
+        ?? (await runPrereqsAsync(project.id, { force: true })).runId;
       try {
         const initial = await fetchPrereqRun(runId);
         if (!abort.cancelled) setActiveRun(initial);
@@ -125,6 +131,14 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
       }
     }
   }
+
+  // Attach to a run started by a FlowCard's "Run now" — surfaces the same
+  // expanded + progress UI without duplicating the runPrereqsAsync call.
+  useEffect(() => {
+    if (!externalRunId || running) return;
+    handleRun({ runId: externalRunId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalRunId]);
 
   async function saveInterval(next: number) {
     if (next === project.prereqIntervalMinutes) return;
@@ -231,7 +245,7 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
         <div className="prereq-actions">
           <button
             className="ghost small btn-busy"
-            onClick={handleRun}
+            onClick={() => handleRun()}
             disabled={running || !hasSteps}
             title={hasSteps ? "Run the prereq chain now" : "Add a step first"}
           >
