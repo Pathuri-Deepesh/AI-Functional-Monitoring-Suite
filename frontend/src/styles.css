@@ -1417,21 +1417,50 @@ input::placeholder { color: var(--muted-2); }
 }
 .step-row.step-queued .step-edit-hint { visibility: hidden; }
 
-/* Banner shown above the flow progress bar while prereqs are running first */
+/* Banner shown above the flow progress bar while prereqs are running first.
+   Has a live progress fill underneath the text — gives users a visible signal
+   that the prereq is actively executing (vs hung). */
 .flow-prereq-banner {
+  position: relative;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: var(--r-md);
+  background: rgba(139, 92, 246, 0.08);
+  overflow: hidden;
+  min-height: 32px;
+  animation: bin-banner-in 220ms ease-out;
+}
+.flow-prereq-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.28), rgba(59, 130, 246, 0.20));
+  transition: width 300ms ease;
+  z-index: 0;
+}
+.flow-prereq-content {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--s-2);
   padding: var(--s-2) var(--s-3);
-  background: linear-gradient(90deg, rgba(139, 92, 246, 0.12), rgba(59, 130, 246, 0.08));
-  border: 1px solid rgba(139, 92, 246, 0.35);
-  border-radius: var(--r-md);
   color: var(--text);
   font-size: var(--text-sm);
-  animation: bin-banner-in 220ms ease-out;
+}
+.flow-prereq-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 .flow-prereq-banner .spinner {
   color: #a78bfa;
+}
+.flow-prereq-banner.retrying {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.08);
+}
+.flow-prereq-banner.retrying .flow-prereq-bar {
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.30), rgba(245, 158, 11, 0.20));
 }
 
 /* Flow / prereq live-progress bar shown above the step list while a run is active */
