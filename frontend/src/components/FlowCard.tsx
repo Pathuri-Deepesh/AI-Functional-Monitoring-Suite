@@ -58,6 +58,31 @@ const METHOD_COLOR: Record<string, string> = {
   PATCH: "method-patch",
 };
 
+/**
+ * Phase 1.19 — compute the for-each nesting depth (1..4) of a step given the
+ * ordered list of steps that precede it. Mirrors the backend's
+ * `assertForEachDepth` + the runner's `computeAbsorbedBlock` walk. Returns 0
+ * for non-iterating steps.
+ */
+function computeForEachDepth(step: FlowStep, earlier: FlowStep[]): number {
+  if (!step.forEach) return 0;
+  let scopeStack: string[] = [];
+  for (const s of earlier) {
+    if (s.forEach) {
+      const root = s.forEach.arrayVarName.split(".")[0];
+      const idx = scopeStack.indexOf(root);
+      if (idx >= 0) scopeStack = scopeStack.slice(0, idx + 1);
+      else scopeStack = [];
+      scopeStack.push(s.forEach.itemVarName);
+    } else {
+      scopeStack = [];
+    }
+  }
+  const root = step.forEach.arrayVarName.split(".")[0];
+  const idx = scopeStack.indexOf(root);
+  return idx >= 0 ? Math.min(idx + 2, 4) : 1;
+}
+
 const POLL_MS = 500;
 const POLL_TIMEOUT_MS = 5 * 60_000; // safety cap: stop polling after 5 minutes
 
@@ -385,14 +410,21 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
               {runningStepPosition != null
                 ? `Step ${runningStepPosition} of ${totalSteps}`
                 : `Wrapping up step ${totalSteps} of ${totalSteps}`}
-              {live?.forEachTotal != null && live.forEachIteration != null && (
+              {live?.forEachPath && live.forEachPath.length > 0 && live.forEachTotalPath ? (
+                <>
+                  {" — iteration "}
+                  <strong>
+                    {live.forEachPath.map((n, i) => `${n}/${live.forEachTotalPath![i]}`).join(" → ")}
+                  </strong>
+                </>
+              ) : live?.forEachTotal != null && live.forEachIteration != null ? (
                 <>
                   {" — iteration "}
                   <strong>
                     {live.forEachIteration} of {live.forEachTotal}
                   </strong>
                 </>
-              )}
+              ) : null}
               {isRetrying && live ? (
                 <>
                   {" — "}
@@ -535,12 +567,21 @@ function SortedStepList(props: {
             const allResults =
               displayRun?.stepResults.filter((r) => r.stepId === step.id) ?? [];
             const result = allResults[0] ?? null;
+            // Phase 1.19 — iteration rows are either depth-1 (iterationIndex != null)
+            // OR nested (iterationPath != null). Both are surfaced in the panel.
             const iterationResults = step.forEach
               ? allResults
-                  .filter((r) => r.iterationIndex != null)
-                  .sort(
-                    (a, b) => (a.iterationIndex ?? 0) - (b.iterationIndex ?? 0)
-                  )
+                  .filter((r) => r.iterationIndex != null || (r.iterationPath != null && r.iterationPath.length > 0))
+                  .sort((a, b) => {
+                    const ap = a.iterationPath ?? (a.iterationIndex != null ? [a.iterationIndex] : []);
+                    const bp = b.iterationPath ?? (b.iterationIndex != null ? [b.iterationIndex] : []);
+                    for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
+                      const av = ap[i] ?? -1;
+                      const bv = bp[i] ?? -1;
+                      if (av !== bv) return av - bv;
+                    }
+                    return 0;
+                  })
               : [];
             const isRunningStep =
               running && runningStepPosition === step.position;
@@ -551,6 +592,7 @@ function SortedStepList(props: {
               earlier,
               projectVarNames
             );
+            const forEachDepth = computeForEachDepth(step, earlier);
             return (
               <StepRow
                 key={step.id}
@@ -563,6 +605,7 @@ function SortedStepList(props: {
                   .map((e) => e.saveAs)
                   .filter(Boolean)}
                 forEach={step.forEach}
+                forEachDepth={forEachDepth}
                 iterationResults={iterationResults}
                 result={result}
                 runState={
@@ -602,6 +645,8 @@ function StepRow(props: {
   description: string;
   extractions: string[];
   forEach: ForEachConfig | null;
+  /** Phase 1.19 — 1..4 when this step is a for-each; 0 otherwise. Drives pill color + tree depth. */
+  forEachDepth: number;
   iterationResults: StepResult[];
   result: StepResult | null;
   runState?: "idle" | "running" | "queued";
@@ -621,6 +666,7 @@ function StepRow(props: {
     description,
     extractions,
     forEach,
+    forEachDepth,
     iterationResults,
     result,
     runState = "idle",
@@ -655,9 +701,18 @@ function StepRow(props: {
   // pick the first to learn the planned total (the actual rendered count may
   // be smaller if the run is still in-flight).
   const iterating = forEach != null && iterationResults.length > 0;
-  const iterTotal = iterating ? iterationResults[0].iterationCount ?? iterationResults.length : 0;
+  // Phase 1.19 — for depth >1 rows, iterationCount is NULL; fall back to row count.
+  const iterTotal = iterating
+    ? iterationResults[0].iterationCount ?? iterationResults.length
+    : 0;
   const iterOk = iterationResults.filter((r) => r.ok).length;
   const iterFailed = iterationResults.length - iterOk;
+  const isNested = iterating && iterationResults.some(
+    (r) => r.iterationPath != null && r.iterationPath.length > 0
+  );
+  const wasTruncated = iterationResults.some(
+    (r) => r.skipReason != null && r.skipReason.startsWith("Truncated:")
+  );
   const ok = result?.ok ?? null;
   const skipped = result?.skipped ?? false;
   const isRetry = !!liveAttempt && liveAttempt.attempt > 1;
@@ -724,10 +779,14 @@ function StepRow(props: {
           <span className={`method-tag ${METHOD_COLOR[method] ?? "method-get"}`}>{method}</span>
           {forEach && (
             <span
-              className="step-foreach-pill"
-              title={`Runs once per element of {{${forEach.arrayVarName}}}, exposed as {{${forEach.itemVarName}}}`}
+              className={`step-foreach-pill depth-${Math.max(1, forEachDepth)}`}
+              title={
+                forEachDepth > 1
+                  ? `Loop depth ${forEachDepth} of 4 — iterates {{${forEach.itemVarName}}} (nested inside outer loop's "${forEach.arrayVarName.split(".")[0]}")`
+                  : `Runs once per element of {{${forEach.arrayVarName}}}, exposed as {{${forEach.itemVarName}}}`
+              }
             >
-              ⟳ for each {`{{${forEach.itemVarName}}}`}
+              ⟳ {forEachDepth > 1 ? `L${forEachDepth} ` : ""}for each {`{{${forEach.itemVarName}}}`}
             </span>
           )}
           <span className="url-link" style={{ borderBottom: "none", color: "var(--text)" }}>
@@ -801,7 +860,7 @@ function StepRow(props: {
               ({iterTotal}) ✓ {iterOk} / ✗ {iterFailed}
               <span className="chevron" aria-hidden>{iterationsOpen ? "▴" : "▾"}</span>
             </button>
-            {iterTotal >= 100 && (
+            {iterTotal >= 100 && !isNested && (
               <span
                 className="meta-chip warn"
                 title="The source array had more than 100 elements; only the first 100 were iterated."
@@ -809,9 +868,17 @@ function StepRow(props: {
                 ⚠ truncated to 100
               </span>
             )}
+            {wasTruncated && (
+              <span
+                className="meta-chip warn"
+                title="Total call budget (10,000 HTTP calls per run) was reached — further iterations were skipped."
+              >
+                ⚠ truncated at 10,000
+              </span>
+            )}
           </div>
         )}
-        {iterating && iterationsOpen && (
+        {iterating && iterationsOpen && !isNested && (
           <div className="step-iterations-panel" onClick={(e) => e.stopPropagation()}>
             {iterationResults.map((r) => {
               const idx = (r.iterationIndex ?? 0) + 1;
@@ -839,6 +906,11 @@ function StepRow(props: {
             })}
           </div>
         )}
+        {iterating && iterationsOpen && isNested && (
+          <div className="step-iterations-panel" onClick={(e) => e.stopPropagation()}>
+            <IterationTree rows={iterationResults} urlTemplate={url} />
+          </div>
+        )}
         {!result && extractions.length > 0 && (
           <div className="step-result-meta">
             <span className="meta-chip muted">will capture: {extractions.join(", ")}</span>
@@ -862,4 +934,252 @@ function StepRow(props: {
       <div className="step-edit-hint">edit ›</div>
     </div>
   );
+}
+
+// =============================================================
+// Phase 1.19 — Hierarchical iteration tree
+// =============================================================
+
+interface IterNode {
+  index: number;            // 0-based index at this level
+  total: number;            // total siblings at this level (from iterationPathCount)
+  rows: StepResult[];       // direct rows whose iterationPath has length === level+1
+  children: Map<number, IterNode>;
+}
+
+function buildIterTree(rows: StepResult[]): IterNode {
+  const root: IterNode = { index: -1, total: 0, rows: [], children: new Map() };
+  for (const r of rows) {
+    const path = r.iterationPath ?? (r.iterationIndex != null ? [r.iterationIndex] : []);
+    const counts = r.iterationPathCount ?? (r.iterationCount != null ? [r.iterationCount] : []);
+    let node = root;
+    for (let i = 0; i < path.length; i++) {
+      const idx = path[i];
+      const total = counts[i] ?? path[i] + 1;
+      let child = node.children.get(idx);
+      if (!child) {
+        child = { index: idx, total, rows: [], children: new Map() };
+        node.children.set(idx, child);
+      }
+      if (i === path.length - 1) child.rows.push(r);
+      node = child;
+    }
+  }
+  return root;
+}
+
+function IterationTree(props: { rows: StepResult[]; urlTemplate: string }) {
+  const tree = useMemo(() => buildIterTree(props.rows), [props.rows]);
+  // Split the template at each `{{var}}` placeholder. parts[i] is the literal
+  // text BETWEEN var-i and var-(i+1) (parts[0] is the text BEFORE the first var).
+  // Used by aggregatorUrl() to chop a leaf URL cleanly at segment boundaries.
+  const templateParts = useMemo(
+    () => props.urlTemplate.split(/\{\{[^}]+\}\}/),
+    [props.urlTemplate]
+  );
+  // Bumping this key forces every IterNodeView to re-mount, which resets its
+  // local `open` state to the new default — that's how the "Collapse all" /
+  // "Expand all" toggle propagates without threading state through the tree.
+  const [openVersion, setOpenVersion] = useState(0);
+  const [defaultOpen, setDefaultOpen] = useState(true);
+  const toggleAll = () => {
+    setDefaultOpen((v) => !v);
+    setOpenVersion((v) => v + 1);
+  };
+  return (
+    <div className="step-iter-tree">
+      <div className="step-iter-toolbar">
+        <button type="button" className="step-iter-toggle-all" onClick={toggleAll}>
+          {defaultOpen ? "▾ Collapse all" : "▸ Expand all"}
+        </button>
+      </div>
+      <IterLevel
+        key={openVersion}
+        node={tree}
+        level={0}
+        templateParts={templateParts}
+        defaultOpen={defaultOpen}
+      />
+    </div>
+  );
+}
+
+function IterLevel(props: {
+  node: IterNode;
+  level: number;
+  templateParts: string[];
+  defaultOpen: boolean;
+}) {
+  const { node, level, templateParts, defaultOpen } = props;
+  const children = [...node.children.values()].sort((a, b) => a.index - b.index);
+  return (
+    <div className="step-iter-children">
+      {children.map((c) => (
+        <IterNodeView
+          key={c.index}
+          node={c}
+          level={level + 1}
+          templateParts={templateParts}
+          defaultOpen={defaultOpen}
+        />
+      ))}
+    </div>
+  );
+}
+
+function IterNodeView(props: {
+  node: IterNode;
+  level: number;
+  templateParts: string[];
+  defaultOpen: boolean;
+}) {
+  const { node, level, templateParts, defaultOpen } = props;
+  const [open, setOpen] = useState(defaultOpen);
+  const isLeaf = node.children.size === 0;
+  // Aggregate ok/fail across this branch (rows at any depth under this node).
+  const { ok, fail } = countBranch(node);
+  const branchOk = fail === 0;
+  // The HTTP-call row that belongs to this node (depth === level), if present.
+  const ownRow = node.rows[0];
+  const status = branchOk ? "ok" : "fail";
+  // Leaf node = real HTTP call → use the row's actually-fetched URL.
+  // Aggregator → derive the partial URL from the step's template + the level-N
+  // loop var's bound value (snaps cleanly to segment boundaries).
+  const displayUrl = ownRow?.resolvedUrl ?? aggregatorUrl(node, templateParts, level);
+
+  return (
+    <div className={`step-iter-node step-iter-level-${Math.min(level, 4)} ${status}`}>
+      <button
+        type="button"
+        className="step-iter-breadcrumb"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!isLeaf) setOpen((v) => !v);
+        }}
+      >
+        {!isLeaf && <span className="chevron">{open ? "▾" : "▸"}</span>}
+        <span className="iter-num">#{node.index + 1}</span>
+        <span className="muted small">of {node.total}</span>
+        {ownRow && (
+          <>
+            <span className={`iter-status ${ownRow.ok ? "g-2xx" : "g-5xx"}`}>
+              {ownRow.ok ? "✓" : "✗"} {ownRow.statusCode ?? (ownRow.errorReason ? "ERR" : "—")}
+            </span>
+            {ownRow.timings.totalMs != null && (
+              <span className="iter-latency muted small">{ownRow.timings.totalMs}ms</span>
+            )}
+            {ownRow.errorReason && (
+              <span className="iter-reason" title={ownRow.errorReason}>
+                {ownRow.errorReason.slice(0, 60)}
+              </span>
+            )}
+          </>
+        )}
+        {!isLeaf && (
+          <span className="muted small">
+            · {ok} ok / {fail} fail
+          </span>
+        )}
+      </button>
+      {displayUrl && <CopyableUrl url={displayUrl} />}
+      {open && !isLeaf && (
+        <IterLevel
+          node={node}
+          level={level}
+          templateParts={templateParts}
+          defaultOpen={defaultOpen}
+        />
+      )}
+    </div>
+  );
+}
+
+function CopyableUrl(props: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(props.url);
+    } catch {
+      // Fallback: blur-safe selection via temporary textarea
+      const ta = document.createElement("textarea");
+      ta.value = props.url;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch {}
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  return (
+    <button
+      type="button"
+      className={`iter-url${copied ? " iter-url-copied" : ""}`}
+      title={copied ? "Copied!" : `Click to copy:  ${props.url}`}
+      onClick={handleCopy}
+    >
+      <span className="iter-url-text">{props.url}</span>
+      <span className="iter-url-copy-icon" aria-hidden>{copied ? "✓ copied" : "⧉ copy"}</span>
+    </button>
+  );
+}
+
+function firstLeafUrl(node: IterNode): string | null {
+  if (node.rows[0]?.resolvedUrl) return node.rows[0].resolvedUrl;
+  for (const c of node.children.values()) {
+    const u = firstLeafUrl(c);
+    if (u) return u;
+  }
+  return null;
+}
+
+/**
+ * URL to show on an aggregator node at depth `level` (1-indexed). Chops a
+ * descendant leaf URL at the boundary right AFTER the level-th `{{var}}` was
+ * substituted, so it always lands on a clean path segment — never mid-segment.
+ *
+ * Concretely for template `.../student/{{student.id}}/subject/{{subject.id}}/mark/{{mark.id}}/report/{{report.id}}`:
+ *   - level 1 → `.../student/std-2`              (chop before `/subject/`)
+ *   - level 2 → `.../student/std-2/subject/sub-2-math`  (chop before `/mark/`)
+ *   - level 3 → `.../student/std-2/subject/sub-2-math/mark/mark-2-math-mid` (chop before `/report/`)
+ *
+ * If the template has fewer placeholders than the tree has levels, or the
+ * literal can't be located, falls back to the full leaf URL.
+ */
+function aggregatorUrl(node: IterNode, templateParts: string[], level: number): string | null {
+  const leafUrl = firstLeafUrl(node);
+  if (!leafUrl) return null;
+  // templateParts.length === N+1 where N = # of {{vars}} in the template.
+  // The literal that comes AFTER the level-th var is templateParts[level].
+  // If the template doesn't have a level-th var (or the next literal is empty),
+  // just show the full leaf URL.
+  if (level >= templateParts.length) return leafUrl;
+  const nextLiteral = templateParts[level];
+  if (!nextLiteral) return leafUrl;
+  // Compute a safe minimum search start so an earlier-occurring identical
+  // literal can't trick us. The prefix we know exists in leafUrl has length:
+  //   parts[0] + (level vars, each ≥1 char) + parts[1..level-1]
+  let minStart = 0;
+  for (let i = 0; i < level; i++) minStart += templateParts[i].length + 1;
+  const pos = leafUrl.indexOf(nextLiteral, minStart);
+  if (pos === -1) return leafUrl;
+  return leafUrl.slice(0, pos);
+}
+
+function countBranch(node: IterNode): { ok: number; fail: number } {
+  let ok = 0;
+  let fail = 0;
+  for (const r of node.rows) {
+    if (r.ok) ok++;
+    else fail++;
+  }
+  for (const c of node.children.values()) {
+    const sub = countBranch(c);
+    ok += sub.ok;
+    fail += sub.fail;
+  }
+  return { ok, fail };
 }

@@ -309,6 +309,7 @@ async function executeRun(
       skipped: false,
       skipReason: null,
       ok: outcome.ok,
+      resolvedUrl: resolved.url,
     });
 
     if (!outcome.ok) {

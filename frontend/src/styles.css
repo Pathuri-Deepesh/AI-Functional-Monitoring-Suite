@@ -1653,6 +1653,208 @@ input::placeholder { color: var(--muted-2); }
   font-size: var(--text-sm);
 }
 
+/* =========================================================================
+   Phase 1.19 — Nested for-each (depth coloring + tree)
+   - Loop-pill depth accents (teal / violet / amber / rose).
+   - Hierarchical iteration panel with per-level left-edge stripe + indent.
+   ========================================================================= */
+.step-foreach-pill.depth-1 {
+  color: #5eead4;
+  background: rgba(20, 184, 166, 0.08);
+  border-color: rgba(94, 234, 212, 0.35);
+}
+.step-foreach-pill.depth-2 {
+  color: #c4b5fd;
+  background: rgba(139, 92, 246, 0.10);
+  border-color: rgba(196, 181, 253, 0.40);
+}
+.step-foreach-pill.depth-3 {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.10);
+  border-color: rgba(252, 211, 77, 0.40);
+}
+.step-foreach-pill.depth-4 {
+  color: #fda4af;
+  background: rgba(244, 63, 94, 0.10);
+  border-color: rgba(253, 164, 175, 0.40);
+}
+
+.step-foreach-depth-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 8px;
+}
+.step-foreach-depth-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.step-foreach-depth-badge.depth-1 { color: #5eead4; background: rgba(20, 184, 166, 0.10); }
+.step-foreach-depth-badge.depth-2 { color: #c4b5fd; background: rgba(139, 92, 246, 0.12); }
+.step-foreach-depth-badge.depth-3 { color: #fcd34d; background: rgba(245, 158, 11, 0.12); }
+.step-foreach-depth-badge.depth-4 { color: #fda4af; background: rgba(244, 63, 94, 0.12); }
+
+.step-foreach-estimate {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(99, 102, 241, 0.06);
+  border: 1px solid rgba(129, 140, 248, 0.30);
+  border-radius: var(--r-sm);
+  font-size: var(--text-xs);
+  color: var(--muted);
+  line-height: 1.5;
+}
+.step-foreach-estimate strong {
+  color: var(--text);
+}
+
+.step-iter-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.step-iter-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 16px;
+}
+.step-iter-node {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 2px solid transparent;
+  padding-left: 8px;
+}
+.step-iter-level-1 { border-left-color: rgba(94, 234, 212, 0.55); }
+.step-iter-level-2 { border-left-color: rgba(196, 181, 253, 0.55); }
+.step-iter-level-3 { border-left-color: rgba(252, 211, 77, 0.55); }
+.step-iter-level-4 { border-left-color: rgba(253, 164, 175, 0.55); }
+.step-iter-node.fail {
+  background: rgba(239, 68, 68, 0.04);
+  border-radius: var(--r-sm);
+}
+.step-iter-breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  text-align: left;
+  border-radius: var(--r-sm);
+  transition: background var(--t-fast);
+}
+.step-iter-breadcrumb:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.step-iter-breadcrumb .chevron {
+  font-size: 10px;
+  opacity: 0.7;
+  min-width: 10px;
+}
+.step-iter-breadcrumb .iter-num {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--text);
+}
+.step-iter-breadcrumb .iter-status {
+  font-weight: 600;
+}
+.step-iter-breadcrumb .iter-status.g-2xx { color: var(--g-2xx); }
+.step-iter-breadcrumb .iter-status.g-5xx { color: var(--g-5xx); }
+.step-iter-breadcrumb .iter-latency {
+  font-variant-numeric: tabular-nums;
+}
+.step-iter-breadcrumb .iter-reason {
+  color: var(--g-5xx);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.step-iter-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 8px 6px;
+}
+.step-iter-toggle-all {
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 4px;
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.step-iter-toggle-all:hover {
+  background: rgba(148, 163, 184, 0.10);
+  color: var(--text);
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+.step-iter-node > .iter-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 3px 8px 5px 28px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: var(--text-xs);
+  color: var(--muted-2);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.step-iter-node > .iter-url:hover {
+  background: rgba(148, 163, 184, 0.10);
+  color: var(--text);
+}
+.step-iter-node > .iter-url:focus-visible {
+  outline: 2px solid var(--accent, #5eead4);
+  outline-offset: 1px;
+}
+.step-iter-node > .iter-url .iter-url-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+.step-iter-node > .iter-url .iter-url-copy-icon {
+  flex-shrink: 0;
+  font-size: 0.95em;
+  opacity: 0;
+  color: var(--muted-2);
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.step-iter-node > .iter-url:hover .iter-url-copy-icon,
+.step-iter-node > .iter-url:focus-visible .iter-url-copy-icon {
+  opacity: 0.85;
+}
+.step-iter-node > .iter-url.iter-url-copied {
+  background: rgba(94, 234, 212, 0.12);
+  color: var(--g-2xx, #5eead4);
+}
+.step-iter-node > .iter-url.iter-url-copied .iter-url-copy-icon {
+  opacity: 1;
+  color: var(--g-2xx, #5eead4);
+}
+
 .step-edit-hint {
   color: var(--muted-2);
   font-size: var(--text-xs);

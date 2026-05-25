@@ -53,3 +53,6 @@ backend/data/db.sqlite
 backend/data/*.sqlite
 backend/data/*.sqlite-shm
 backend/data/*.sqlite-wal
+
+# Local smoke-test scratch (curl -o run3.json etc.) — never commit
+run*.json

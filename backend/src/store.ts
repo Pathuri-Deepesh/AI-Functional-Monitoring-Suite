@@ -641,6 +641,9 @@ interface StepResultRow {
   checked_at: number;
   iteration_index: number | null;
   iteration_count: number | null;
+  iteration_path_json: string | null;
+  iteration_path_count_json: string | null;
+  resolved_url: string | null;
 }
 
 function rowToFlow(r: FlowRow & { last_run_ok?: number | null; last_run_total_ms?: number | null }): Flow {
@@ -724,6 +727,13 @@ function rowToStepResult(r: StepResultRow): StepResult {
     checkedAt: r.checked_at,
     iterationIndex: r.iteration_index,
     iterationCount: r.iteration_count,
+    iterationPath: r.iteration_path_json
+      ? safeParse<number[] | null>(r.iteration_path_json, null)
+      : null,
+    iterationPathCount: r.iteration_path_count_json
+      ? safeParse<number[] | null>(r.iteration_path_count_json, null)
+      : null,
+    resolvedUrl: r.resolved_url,
   };
 }
 
@@ -842,10 +852,16 @@ export function getFlowStep(id: string): FlowStep | undefined {
 }
 
 const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+/** Phase 1.19 — `arrayVarName` may now be a dotted path against an outer-loop item. */
+const DOTTED_PATH_RE = /^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/;
+
+/** Phase 1.19 — max nested for-each depth in a single flow. */
+const FOR_EACH_MAX_DEPTH = 4;
 
 /**
- * Phase 1.18: normalize+validate a ForEachConfig payload, or return null.
+ * Phase 1.18 / 1.19: normalize+validate a ForEachConfig payload, or return null.
  * Throws on partial/invalid input so the user gets immediate API feedback.
+ * `arrayVarName` may now be a dotted path (Phase 1.19) like `student.subjects`.
  */
 function normalizeForEach(raw: unknown): ForEachConfig | null {
   if (raw == null) return null;
@@ -853,8 +869,8 @@ function normalizeForEach(raw: unknown): ForEachConfig | null {
   const arrayVarName = String((raw as any).arrayVarName ?? "").trim();
   const itemVarName = String((raw as any).itemVarName ?? "").trim();
   if (!arrayVarName && !itemVarName) return null;
-  if (!IDENT_RE.test(arrayVarName)) {
-    throw new Error("forEach.arrayVarName must be a valid identifier");
+  if (!DOTTED_PATH_RE.test(arrayVarName)) {
+    throw new Error("forEach.arrayVarName must be a variable name or dotted path (e.g. 'students' or 'student.subjects')");
   }
   if (!IDENT_RE.test(itemVarName)) {
     throw new Error("forEach.itemVarName must be a valid identifier");
@@ -863,17 +879,64 @@ function normalizeForEach(raw: unknown): ForEachConfig | null {
 }
 
 /**
- * Phase 1.18 single-level guard: a flow may have at most one for-each step.
- * `excludeStepId` lets updateFlowStep skip the step being patched.
+ * Load the (id, position, forEach) tuples for every step in a flow. Used by
+ * assertForEachDepth to validate a proposed change without re-fetching the
+ * full FlowStep rows.
  */
-function assertSingleForEach(flowId: string, excludeStepId: string | null): void {
+function loadStepsForDepthCheck(
+  flowId: string
+): Array<{ id: string; position: number; forEach: ForEachConfig | null }> {
   const rows = db()
-    .prepare("SELECT id, for_each_config_json FROM flow_steps WHERE flow_id = ?")
-    .all(flowId) as Array<{ id: string; for_each_config_json: string | null }>;
-  for (const r of rows) {
-    if (r.id === excludeStepId) continue;
-    if (r.for_each_config_json && r.for_each_config_json !== "null") {
-      throw new Error("only one for-each step is allowed per flow");
+    .prepare(
+      "SELECT id, position, for_each_config_json FROM flow_steps WHERE flow_id = ? ORDER BY position"
+    )
+    .all(flowId) as Array<{
+      id: string;
+      position: number;
+      for_each_config_json: string | null;
+    }>;
+  return rows.map((r) => ({
+    id: r.id,
+    position: r.position,
+    forEach: r.for_each_config_json
+      ? (safeParse<ForEachConfig | null>(r.for_each_config_json, null))
+      : null,
+  }));
+}
+
+/**
+ * Phase 1.19 — nesting depth guard. Replaces 1.18's `assertSingleForEach`.
+ *
+ * Walks the proposed (post-edit) list of steps in position order, maintaining a
+ * "scope stack" of for-each item names. For each for-each step:
+ *   - If `arrayVarName.split('.')[0]` is bound by the stack: this step is nested
+ *     inside that scope. Truncate stack to that depth, then push this step's item.
+ *   - Otherwise: this step starts a fresh top-level loop. Reset stack.
+ * A non-iterating step breaks the chain (stack resets).
+ * Throws if at any point the stack would exceed FOR_EACH_MAX_DEPTH (4).
+ */
+function assertForEachDepth(
+  steps: Array<{ id: string; position: number; forEach: ForEachConfig | null }>
+): void {
+  const sorted = [...steps].sort((a, b) => a.position - b.position);
+  let stack: string[] = [];
+  for (const s of sorted) {
+    if (!s.forEach) {
+      stack = [];
+      continue;
+    }
+    const root = s.forEach.arrayVarName.split(".")[0];
+    const matchIdx = stack.indexOf(root);
+    if (matchIdx >= 0) {
+      stack = stack.slice(0, matchIdx + 1);
+      stack.push(s.forEach.itemVarName);
+    } else {
+      stack = [s.forEach.itemVarName];
+    }
+    if (stack.length > FOR_EACH_MAX_DEPTH) {
+      throw new Error(
+        `for-each depth cannot exceed ${FOR_EACH_MAX_DEPTH} (got ${stack.length})`
+      );
     }
   }
 }
@@ -913,13 +976,19 @@ export function addFlowStep(input: {
   }
 
   const forEach = normalizeForEach(input.forEach);
-  if (forEach) assertSingleForEach(input.flowId, null);
 
   // Next position = current max + 1
   const maxRow = db()
     .prepare("SELECT MAX(position) AS m FROM flow_steps WHERE flow_id = ?")
     .get(input.flowId) as { m: number | null };
   const nextPos = (maxRow.m ?? 0) + 1;
+
+  // Phase 1.19 — validate nesting depth on the proposed post-add step list
+  if (forEach) {
+    const proposed = loadStepsForDepthCheck(input.flowId);
+    proposed.push({ id: "__new__", position: nextPos, forEach });
+    assertForEachDepth(proposed);
+  }
 
   const id = randomUUID();
   db()
@@ -984,7 +1053,14 @@ export function updateFlowStep(
   const nextForEach = forEachProvided
     ? normalizeForEach(patch.forEach)
     : existing.forEach ?? null;
-  if (nextForEach) assertSingleForEach(existing.flowId, id);
+
+  // Phase 1.19 — validate nesting depth on the proposed post-update step list
+  if (forEachProvided) {
+    const proposed = loadStepsForDepthCheck(existing.flowId);
+    const idx = proposed.findIndex((s) => s.id === id);
+    if (idx >= 0) proposed[idx] = { ...proposed[idx], forEach: nextForEach };
+    assertForEachDepth(proposed);
+  }
 
   db()
     .prepare(
@@ -1084,8 +1160,15 @@ export function copyFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
   if (!source) throw new Error("Source step not found");
   const target = getFlow(targetFlowId);
   if (!target) throw new Error("Target flow not found");
-  // Phase 1.18: refuse if source has forEach and target already has a forEach step
-  if (source.forEach) assertSingleForEach(targetFlowId, null);
+  // Phase 1.19: validate nesting depth after the source is inserted at position 1
+  if (source.forEach) {
+    const proposed = loadStepsForDepthCheck(targetFlowId).map((s) => ({
+      ...s,
+      position: s.position + 1,
+    }));
+    proposed.unshift({ id: "__new__", position: 1, forEach: source.forEach });
+    assertForEachDepth(proposed);
+  }
   return insertStepCopyAtTop(targetFlowId, source);
 }
 
@@ -1097,8 +1180,15 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
   }
   const target = getFlow(targetFlowId);
   if (!target) throw new Error("Target flow not found");
-  // Phase 1.18: refuse if source has forEach and target already has a forEach step
-  if (source.forEach) assertSingleForEach(targetFlowId, null);
+  // Phase 1.19: validate nesting depth after the source is inserted at position 1
+  if (source.forEach) {
+    const proposed = loadStepsForDepthCheck(targetFlowId).map((s) => ({
+      ...s,
+      position: s.position + 1,
+    }));
+    proposed.unshift({ id: "__new__", position: 1, forEach: source.forEach });
+    assertForEachDepth(proposed);
+  }
 
   const sourceFlowId = source.flowId;
   const sourcePosition = source.position;
@@ -1199,14 +1289,21 @@ export function recordStepResult(args: {
   ok: boolean;
   iterationIndex?: number | null;
   iterationCount?: number | null;
+  /** Phase 1.19 — nested iteration path (0-indexed). NULL for flat or non-iterating rows. */
+  iterationPath?: number[] | null;
+  /** Phase 1.19 — per-level totals matching iterationPath. */
+  iterationPathCount?: number[] | null;
+  /** Phase 1.19.1 — URL actually fetched after {{var}} substitution. NULL if no fetch happened. */
+  resolvedUrl?: string | null;
 }): void {
   db()
     .prepare(
       `INSERT INTO step_results (id, flow_run_id, step_id, position, status_code, status_group, error_reason,
                                   dns_ms, tcp_ms, tls_ms, ttfb_ms, download_ms, total_ms,
                                   assertion_results_json, extracted_values_json, attempts, skipped, skip_reason,
-                                  ok, checked_at, iteration_index, iteration_count)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                  ok, checked_at, iteration_index, iteration_count,
+                                  iteration_path_json, iteration_path_count_json, resolved_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       randomUUID(),
@@ -1230,7 +1327,10 @@ export function recordStepResult(args: {
       args.ok ? 1 : 0,
       Date.now(),
       args.iterationIndex ?? null,
-      args.iterationCount ?? null
+      args.iterationCount ?? null,
+      args.iterationPath ? JSON.stringify(args.iterationPath) : null,
+      args.iterationPathCount ? JSON.stringify(args.iterationPathCount) : null,
+      args.resolvedUrl ?? null
     );
 }
 
@@ -1368,6 +1468,7 @@ interface PrereqStepResultRow {
   skip_reason: string | null;
   ok: number;
   checked_at: number;
+  resolved_url: string | null;
 }
 
 function rowToPrereqStep(r: PrereqStepRow): PrereqStep {
@@ -1416,9 +1517,12 @@ function rowToPrereqStepResult(r: PrereqStepResultRow): StepResult {
     skipReason: r.skip_reason,
     ok: r.ok === 1,
     checkedAt: r.checked_at,
-    // Prereq steps never iterate (Phase 1.18 single-level constraint applies to flows only).
+    // Prereq steps never iterate (for-each is a flow-only feature).
     iterationIndex: null,
     iterationCount: null,
+    iterationPath: null,
+    iterationPathCount: null,
+    resolvedUrl: r.resolved_url,
   };
 }
 
@@ -1643,14 +1747,16 @@ export function recordPrereqStepResult(args: {
   skipped: boolean;
   skipReason: string | null;
   ok: boolean;
+  /** Phase 1.19.1 — URL actually fetched after {{var}} substitution. NULL if no fetch happened. */
+  resolvedUrl?: string | null;
 }): void {
   db()
     .prepare(
       `INSERT INTO prereq_step_results (id, prereq_run_id, step_id, position, status_code, status_group, error_reason,
                                          dns_ms, tcp_ms, tls_ms, ttfb_ms, download_ms, total_ms,
                                          assertion_results_json, extracted_values_json, attempts, skipped, skip_reason,
-                                         ok, checked_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                         ok, checked_at, resolved_url)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       randomUUID(),
@@ -1672,7 +1778,8 @@ export function recordPrereqStepResult(args: {
       args.skipped ? 1 : 0,
       args.skipReason,
       args.ok ? 1 : 0,
-      Date.now()
+      Date.now(),
+      args.resolvedUrl ?? null
     );
 }
 
