@@ -1,4 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   clearProjectVariables,
   fetchPrereqRun,
@@ -19,6 +38,7 @@ import type {
   StepResult,
 } from "../types";
 import { checkStepVarRefs } from "../utils/varRefs";
+import { GripIcon, StepDragPreview } from "./StepDragHandle";
 
 const POLL_MS = 500;
 const POLL_TIMEOUT_MS = 5 * 60_000;
@@ -57,11 +77,12 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
   /** Pre-run expanded state — restored after the run finishes so the panel
    *  returns to whatever the user had it set to before clicking Run now. */
   const expandedBeforeRun = useRef<boolean | null>(null);
-  // Drag-and-drop reorder state. Mirrors FlowCard — indices are into the
-  // sorted-by-position step array.
-  const [dragSourceIdx, setDragSourceIdx] = useState<number | null>(null);
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
-  const [dragOverPos, setDragOverPos] = useState<"above" | "below" | null>(null);
+  // dnd-kit DnD state — `activeDragId` drives the floating DragOverlay preview.
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   async function load() {
     try {
@@ -168,17 +189,21 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
     }
   }
 
-  /** Persist a drag-and-drop reorder of prereq steps. `fromIdx` = original
-   *  position of dragged row, `toIdx` = "insert before this index" target. */
-  async function handleDropReorder(fromIdx: number, toIdx: number) {
-    if (!bundle) return;
-    if (fromIdx === toIdx || fromIdx === toIdx - 1) return; // no-op
+  function handleDragStart(event: DragStartEvent) {
+    setActiveDragId(String(event.active.id));
+  }
+
+  /** dnd-kit drop handler — same shape as FlowCard. Uses arrayMove to compute
+   *  the new order, applies optimistically, rolls back on API failure. */
+  async function handleDragEnd(event: DragEndEvent) {
+    setActiveDragId(null);
+    const { active, over } = event;
+    if (!bundle || !over || active.id === over.id) return;
     const sorted = [...bundle.steps].sort((a, b) => a.position - b.position);
-    if (fromIdx < 0 || fromIdx >= sorted.length) return;
-    const next = [...sorted];
-    const [moved] = next.splice(fromIdx, 1);
-    const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx;
-    next.splice(insertAt, 0, moved);
+    const fromIdx = sorted.findIndex((s) => s.id === active.id);
+    const toIdx = sorted.findIndex((s) => s.id === over.id);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const next = arrayMove(sorted, fromIdx, toIdx);
     const orderedIds = next.map((s) => s.id);
     setBundle({
       ...bundle,
@@ -368,63 +393,20 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
             </div>
           ) : (
             <>
-              <div className="step-list">
-                {steps
-                  .slice()
-                  .sort((a, b) => a.position - b.position)
-                  .map((s, idx, arr) => {
-                    const result = displayRun?.stepResults.find((r) => r.stepId === s.id);
-                    const isRunningStep = running && runningStepPosition === s.position;
-                    const isQueued = running && !result && !isRunningStep;
-                    const earlier = arr.slice(0, idx);
-                    const brokenVarRefs = checkStepVarRefs(
-                      s,
-                      earlier,
-                      vars.map((v) => v.name)
-                    );
-                    return (
-                      <PrereqStepRow
-                        key={s.id}
-                        index={idx}
-                        step={s}
-                        result={result ?? null}
-                        runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
-                        liveAttempt={isRunningStep ? live : null}
-                        brokenVarRefs={brokenVarRefs}
-                        dragSourceIdx={dragSourceIdx}
-                        dragOverIdx={dragOverIdx}
-                        dragOverPos={dragOverPos}
-                        dragDisabled={running}
-                        onDragStart={() => setDragSourceIdx(idx)}
-                        onDragOver={(pos) => {
-                          if (dragOverIdx !== idx) setDragOverIdx(idx);
-                          if (dragOverPos !== pos) setDragOverPos(pos);
-                        }}
-                        onDragLeave={() => {
-                          if (dragOverIdx === idx) {
-                            setDragOverIdx(null);
-                            setDragOverPos(null);
-                          }
-                        }}
-                        onDragEnd={() => {
-                          setDragSourceIdx(null);
-                          setDragOverIdx(null);
-                          setDragOverPos(null);
-                        }}
-                        onDrop={() => {
-                          if (dragSourceIdx != null) {
-                            const target = dragOverPos === "below" ? idx + 1 : idx;
-                            handleDropReorder(dragSourceIdx, target);
-                          }
-                          setDragSourceIdx(null);
-                          setDragOverIdx(null);
-                          setDragOverPos(null);
-                        }}
-                        onClick={() => onEditStep(s, steps)}
-                      />
-                    );
-                  })}
-              </div>
+              <SortedPrereqStepList
+                steps={steps}
+                displayRun={displayRun}
+                running={running}
+                runningStepPosition={runningStepPosition}
+                live={live}
+                varNames={vars.map((v) => v.name)}
+                sensors={sensors}
+                activeDragId={activeDragId}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+                onDragCancel={() => setActiveDragId(null)}
+                onEditStep={(step) => onEditStep(step, steps)}
+              />
               <div className="flow-add-step">
                 <button className="ghost small" onClick={() => onAddStep(steps)}>+ Add prereq step</button>
                 {lastRun && (
@@ -457,42 +439,133 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
   );
 }
 
+/**
+ * Wraps the prereq step list in a dnd-kit DndContext + SortableContext +
+ * DragOverlay. Mirrors `SortedStepList` in FlowCard so reorder UX is identical
+ * across the two panels.
+ */
+function SortedPrereqStepList(props: {
+  steps: PrereqStep[];
+  displayRun: PrereqRun | null;
+  running: boolean;
+  runningStepPosition: number | null;
+  live: LiveStepProgress | null;
+  varNames: string[];
+  sensors: ReturnType<typeof useSensors>;
+  activeDragId: string | null;
+  onDragStart: (event: DragStartEvent) => void;
+  onDragEnd: (event: DragEndEvent) => void;
+  onDragCancel: () => void;
+  onEditStep: (step: PrereqStep) => void;
+}) {
+  const {
+    steps,
+    displayRun,
+    running,
+    runningStepPosition,
+    live,
+    varNames,
+    sensors,
+    activeDragId,
+    onDragStart,
+    onDragEnd,
+    onDragCancel,
+    onEditStep,
+  } = props;
+  const sorted = useMemo(
+    () => [...steps].sort((a, b) => a.position - b.position),
+    [steps]
+  );
+  const sortedIds = useMemo(() => sorted.map((s) => s.id), [sorted]);
+  const activeStep = activeDragId
+    ? sorted.find((s) => s.id === activeDragId) ?? null
+    : null;
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragCancel={onDragCancel}
+    >
+      <SortableContext items={sortedIds} strategy={verticalListSortingStrategy}>
+        <div className="step-list">
+          {sorted.map((s, idx, arr) => {
+            const result = displayRun?.stepResults.find(
+              (r) => r.stepId === s.id
+            );
+            const isRunningStep =
+              running && runningStepPosition === s.position;
+            const isQueued = running && !result && !isRunningStep;
+            const earlier = arr.slice(0, idx);
+            const brokenVarRefs = checkStepVarRefs(s, earlier, varNames);
+            return (
+              <PrereqStepRow
+                key={s.id}
+                step={s}
+                result={result ?? null}
+                runState={
+                  isRunningStep ? "running" : isQueued ? "queued" : "idle"
+                }
+                liveAttempt={isRunningStep ? live : null}
+                brokenVarRefs={brokenVarRefs}
+                dragDisabled={running}
+                onClick={() => onEditStep(s)}
+              />
+            );
+          })}
+        </div>
+      </SortableContext>
+      <DragOverlay
+        dropAnimation={{
+          duration: 220,
+          easing: "cubic-bezier(0.18, 0.67, 0.45, 1)",
+        }}
+      >
+        {activeStep ? (
+          <StepDragPreview
+            position={activeStep.position}
+            method={activeStep.method}
+            url={activeStep.url}
+            description={activeStep.description}
+          />
+        ) : null}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
 function PrereqStepRow(props: {
-  index: number;
   step: PrereqStep;
   result: StepResult | null;
   runState?: "idle" | "running" | "queued";
   liveAttempt?: LiveStepProgress | null;
   brokenVarRefs: string[];
-  dragSourceIdx: number | null;
-  dragOverIdx: number | null;
-  dragOverPos: "above" | "below" | null;
   dragDisabled: boolean;
-  onDragStart: () => void;
-  onDragOver: (pos: "above" | "below") => void;
-  onDragLeave: () => void;
-  onDragEnd: () => void;
-  onDrop: () => void;
   onClick: () => void;
 }) {
   const {
-    index,
     step,
     result,
     runState = "idle",
     liveAttempt,
     brokenVarRefs,
-    dragSourceIdx,
-    dragOverIdx,
-    dragOverPos,
     dragDisabled,
-    onDragStart,
-    onDragOver,
-    onDragLeave,
-    onDragEnd,
-    onDrop,
     onClick,
   } = props;
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isSorting,
+  } = useSortable({ id: step.id, disabled: dragDisabled });
+  const sortableStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
   const ok = result?.ok ?? null;
   const skipped = result?.skipped ?? false;
   const isRetry = !!liveAttempt && liveAttempt.attempt > 1;
@@ -522,12 +595,6 @@ function PrereqStepRow(props: {
       : ok === null
       ? "—"
       : result?.statusCode ?? "OK";
-  const isDragging = dragSourceIdx === index;
-  const isDropTarget = dragOverIdx === index && dragSourceIdx !== null && dragSourceIdx !== index;
-  const showAbove =
-    isDropTarget && dragOverPos === "above" && dragSourceIdx !== index - 1;
-  const showBelow =
-    isDropTarget && dragOverPos === "below" && dragSourceIdx !== index + 1;
   const rowClass = [
     "step-row",
     ok === false && !skipped ? "step-failed" : "",
@@ -535,55 +602,30 @@ function PrereqStepRow(props: {
     runState === "running" && isRetry ? "step-retrying" : "",
     runState === "queued" ? "step-queued" : "",
     isDragging ? "step-dragging" : "",
-    showAbove ? "step-drop-above" : "",
-    showBelow ? "step-drop-below" : "",
+    isSorting && !isDragging ? "step-sorting" : "",
   ]
     .filter(Boolean)
     .join(" ");
   return (
     <div
+      ref={setNodeRef}
+      style={sortableStyle}
       className={rowClass}
       onClick={onClick}
-      onDragOver={(e) => {
-        if (dragSourceIdx == null || dragDisabled) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        const rect = e.currentTarget.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        onDragOver(e.clientY < midY ? "above" : "below");
-      }}
-      onDragLeave={(e) => {
-        const related = e.relatedTarget as Node | null;
-        if (related && e.currentTarget.contains(related)) return;
-        onDragLeave();
-      }}
-      onDrop={(e) => {
-        if (dragSourceIdx == null || dragDisabled) return;
-        e.preventDefault();
-        onDrop();
-      }}
     >
-      <div
+      <button
+        type="button"
         className="step-grip"
-        draggable={!dragDisabled}
-        onDragStart={(e) => {
-          if (dragDisabled) {
-            e.preventDefault();
-            return;
-          }
-          e.stopPropagation();
-          e.dataTransfer.effectAllowed = "move";
-          try { e.dataTransfer.setData("text/plain", String(step.position)); } catch {}
-          onDragStart();
-        }}
-        onDragEnd={(e) => { e.stopPropagation(); onDragEnd(); }}
+        {...attributes}
+        {...listeners}
         onClick={(e) => e.stopPropagation()}
-        title={dragDisabled ? "Cannot reorder while running" : "Drag to reorder"}
-        aria-label="Drag to reorder step"
+        disabled={dragDisabled}
+        title={dragDisabled ? "Cannot reorder while running" : "Drag to reorder · Space to grab"}
+        aria-label={`Reorder prereq step ${step.position}`}
       >
-        <span className="step-grip-dots" aria-hidden>⋮⋮</span>
-        <div className="step-num">{step.position}</div>
-      </div>
+        <GripIcon />
+        <span className="step-num">{step.position}</span>
+      </button>
       <div className="step-main">
         <div className="step-line">
           <span className={`pill ${statusClass}`}>{pillText}</span>

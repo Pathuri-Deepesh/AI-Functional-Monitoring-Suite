@@ -171,6 +171,18 @@
 - [x] **16.22** Prereq banner now shows live `Step N of M` + completed count + retry chip + filling progress bar — *2026-05-22*
 - [x] **16.23** FlowCard "Run now" lifts the prereq runId so `PrereqsPanel` attaches and shows its full step-by-step progress UI (matching panel's own Run-now behaviour) — *2026-05-22*
 
+## Phase 1.18.2 — Production-grade drag-and-drop (dnd-kit) ✅ Complete
+
+- [x] **18.2.1** Added `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` dependencies — *2026-05-25*
+- [x] **18.2.2** New `StepDragHandle.tsx` with `GripIcon` (SVG 2×3 dot grid) + `StepDragPreview` (floating overlay content shared by FlowCard + PrereqsPanel) — *2026-05-25*
+- [x] **18.2.3** `FlowCard.tsx`: `SortedStepList` wraps step list in `<DndContext>` + `<SortableContext verticalListSortingStrategy>` + `<DragOverlay>` (with 220ms cubic-bezier drop animation). `StepRow` uses `useSortable({ id })`; row gets `setNodeRef` + `transform` + `transition`; grip button gets `attributes` + `listeners` — *2026-05-25*
+- [x] **18.2.4** `PrereqsPanel.tsx`: mirrored — `SortedPrereqStepList` + `PrereqStepRow.useSortable` — *2026-05-25*
+- [x] **18.2.5** Sensors: `PointerSensor` with `activationConstraint: { distance: 8 }` so a regular click on the row still opens the editor; `KeyboardSensor` with `sortableKeyboardCoordinates` enables full a11y (Tab → grip, Space to grab, ↑/↓ to move, Space to drop, Esc to cancel) — *2026-05-25*
+- [x] **18.2.6** Drop handler uses dnd-kit `arrayMove(sorted, fromIdx, toIdx)` for index math; optimistic UI swap + rollback on `reorderFlowSteps` / `reorderPrereqSteps` failure — *2026-05-25*
+- [x] **18.2.7** `styles.css`: new `.step-grip` (focusable button w/ focus-ring + `touch-action:none`), `.step-dragging` (source row 35% opacity), `.step-sorting` (cursor reset), `.step-drag-preview` (lifted shadow + 1.02 scale + −0.4° tilt + accent border + 2px backdrop blur) — *2026-05-25*
+- [x] **18.2.8** Removed `.step-drop-above/below` pseudo-element insertion lines (dnd-kit's smooth slide-out-of-the-way animation makes the drop position obvious without a separate indicator) — *2026-05-25*
+- [x] **18.2.9** Build clean: tsc + vite build zero warnings; bundle 327KB JS / 59KB CSS (gzip 96KB / 11KB) — *2026-05-25*
+
 ## Phase 1.18.1 — Drag-and-drop step reorder (replaces ▲/▼ arrows) ✅ Complete
 
 - [x] **18.1.1** Frontend `FlowCard.tsx`: parent-level DnD state (`dragSourceIdx` / `dragOverIdx` / `dragOverPos`) + `handleDropReorder(fromIdx, toIdx)` (splice + `insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx` offset math) with optimistic UI swap + rollback on API failure — *2026-05-25*
@@ -257,6 +269,14 @@
 ---
 
 ## Recent activity
+
+### 2026-05-25 — Phase 1.18.2 Production-grade drag-and-drop with dnd-kit (9 items)
+- **Why:** the 1.18.1 hand-rolled HTML5 DnD worked but felt basic — "more advanced, production-level, extreme UX" was the ask. Swapped to **dnd-kit**, the modern React DnD library (Linear, Notion, Vercel all use it). Same `reorderFlowSteps` / `reorderPrereqSteps` backend API — just a richer client.
+- **What's new in the UX:** as you drag a step, every other step in the list smoothly slides out of the way to make room (transform-based, hardware-accelerated). The dragged row dims to 35% opacity in place, and a floating *drag preview* lifts above the page following the cursor exactly — with a soft shadow, a 1.02 scale, a subtle −0.4° tilt, and a backdrop blur. On drop, the preview animates into its new slot over 220ms with an ease-out curve, then the real row fades back to 100%. No more "blue line above/below" — the layout itself shows you where the step will land.
+- **Accessibility built in:** Tab focuses the grip (highlighted with an accent focus-ring), Space picks up the step, ↑/↓ moves it one slot at a time with the same smooth animation, Space drops it, Escape cancels. Touch works too — `touch-action: none` on the grip lets mobile users drag without fighting page scroll.
+- **Click vs drag disambiguation:** `PointerSensor` with `activationConstraint: { distance: 8 }` means a regular click on the grip (or anywhere on the row) still opens the step editor — the drag only starts after 8px of movement. This is the production pattern: no false drags from a slightly twitchy click.
+- **Shared visuals:** new `StepDragHandle.tsx` module exports `GripIcon` (SVG 2×3 dot grid, scales crisply at any DPR) and `StepDragPreview` (the floating overlay's content) so FlowCard and PrereqsPanel render identical DnD without duplicating JSX.
+- **Same backend:** optimistic UI swap then POST to the existing `/steps/reorder` route; rolls back on failure. Bundle cost: +52KB raw / +17KB gzip, all in the dnd-kit library — no custom physics code to maintain.
 
 ### 2026-05-25 — Phase 1.18.1 Drag-and-drop step reorder (7 items)
 - **Why:** manager reversed the Phase 1.17 ▲/▼ arrow decision and asked for "drag and drop, convenient, easy, smooth UX within the flow". Arrows worked but felt clumsy at >3 steps — DnD lets the user jump position 7 → position 1 in one gesture instead of six clicks.

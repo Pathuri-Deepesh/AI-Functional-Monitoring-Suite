@@ -1,4 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import {
   fetchFlow,
   fetchFlowRun,
@@ -23,6 +42,7 @@ import type {
 } from "../types";
 import { checkStepVarRefs } from "../utils/varRefs";
 import { MoveCopyStepModal } from "./MoveCopyStepModal";
+import { GripIcon, StepDragPreview } from "./StepDragHandle";
 
 const GROUP_COLOR: Record<StatusGroup, string> = {
   "2xx": "g-2xx",
@@ -76,13 +96,19 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
   const [moveCopyTarget, setMoveCopyTarget] = useState<
     { mode: "move" | "copy"; step: FlowStep } | null
   >(null);
-  // Drag-and-drop reorder state (Phase 1.18.x). All indices are into the
-  // sorted-by-position step array. dragOverPos says whether the drop indicator
-  // line should sit above or below the row currently being hovered.
-  const [dragSourceIdx, setDragSourceIdx] = useState<number | null>(null);
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
-  const [dragOverPos, setDragOverPos] = useState<"above" | "below" | null>(null);
+  // Drag-and-drop reorder (Phase 1.18.x, dnd-kit). `activeDragId` is the id of
+  // the row being dragged — used to drive the floating DragOverlay preview.
+  const [activeDragId, setActiveDragId] = useState<string | null>(null);
   const pollAbort = useRef<{ cancelled: boolean } | null>(null);
+
+  // Sensors: pointer requires 8px movement before initiating a drag (so a
+  // simple click still opens the step editor); keyboard sensor enables full
+  // accessibility — focus a grip, press Space to grab, arrows to move,
+  // Space to drop, Escape to cancel.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   async function load() {
     try {
@@ -97,22 +123,25 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     } catch {}
   }
 
+  function handleDragStart(event: DragStartEvent) {
+    setActiveDragId(String(event.active.id));
+  }
+
   /**
-   * Persist a reorder triggered by a drag-and-drop drop. `fromIdx` is the
-   * original position of the dragged row; `toIdx` is the "insert before
-   * this index" target. Optimistic UI swap is applied first so the drop
-   * feels instant; on failure we reload the canonical order from the server.
+   * dnd-kit handler — called when the user drops a row. `active.id` is the
+   * step being dragged; `over.id` is the step it was dropped onto.
+   * `arrayMove` from dnd-kit produces the new order; we apply it optimistically
+   * then persist via reorder API, rolling back on failure.
    */
-  async function handleDropReorder(fromIdx: number, toIdx: number) {
-    if (!detail) return;
-    if (fromIdx === toIdx || fromIdx === toIdx - 1) return; // no-op
+  async function handleDragEnd(event: DragEndEvent) {
+    setActiveDragId(null);
+    const { active, over } = event;
+    if (!detail || !over || active.id === over.id) return;
     const sorted = [...detail.steps].sort((a, b) => a.position - b.position);
-    if (fromIdx < 0 || fromIdx >= sorted.length) return;
-    const next = [...sorted];
-    const [moved] = next.splice(fromIdx, 1);
-    // Removing fromIdx shifts every index > fromIdx down by 1.
-    const insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx;
-    next.splice(insertAt, 0, moved);
+    const fromIdx = sorted.findIndex((s) => s.id === active.id);
+    const toIdx = sorted.findIndex((s) => s.id === over.id);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const next = arrayMove(sorted, fromIdx, toIdx);
     const orderedIds = next.map((s) => s.id);
     setDetail({
       ...detail,
@@ -414,77 +443,22 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
             </div>
           ) : (
             <>
-              <div className="step-list">
-                {detail.steps
-                  .slice()
-                  .sort((a, b) => a.position - b.position)
-                  .map((step, idx, arr) => {
-                    const allResults =
-                      displayRun?.stepResults.filter((r) => r.stepId === step.id) ?? [];
-                    // For non-iterating steps there's exactly one row; for for-each
-                    // steps the "headline" result is the first iteration row.
-                    const result = allResults[0] ?? null;
-                    const iterationResults = step.forEach
-                      ? allResults
-                          .filter((r) => r.iterationIndex != null)
-                          .sort((a, b) => (a.iterationIndex ?? 0) - (b.iterationIndex ?? 0))
-                      : [];
-                    const isRunningStep = running && runningStepPosition === step.position;
-                    const isQueued = running && !result && !isRunningStep;
-                    const earlier = arr.slice(0, idx);
-                    const brokenVarRefs = checkStepVarRefs(step, earlier, projectVarNames);
-                    return (
-                      <StepRow
-                        key={step.id}
-                        index={idx}
-                        position={step.position}
-                        method={step.method}
-                        url={step.url}
-                        description={step.description}
-                        extractions={step.extractions.map((e) => e.saveAs).filter(Boolean)}
-                        forEach={step.forEach}
-                        iterationResults={iterationResults}
-                        result={result}
-                        runState={isRunningStep ? "running" : isQueued ? "queued" : "idle"}
-                        liveAttempt={isRunningStep ? live : null}
-                        brokenVarRefs={brokenVarRefs}
-                        dragSourceIdx={dragSourceIdx}
-                        dragOverIdx={dragOverIdx}
-                        dragOverPos={dragOverPos}
-                        dragDisabled={running}
-                        onDragStart={() => setDragSourceIdx(idx)}
-                        onDragOver={(pos) => {
-                          if (dragOverIdx !== idx) setDragOverIdx(idx);
-                          if (dragOverPos !== pos) setDragOverPos(pos);
-                        }}
-                        onDragLeave={() => {
-                          if (dragOverIdx === idx) {
-                            setDragOverIdx(null);
-                            setDragOverPos(null);
-                          }
-                        }}
-                        onDragEnd={() => {
-                          setDragSourceIdx(null);
-                          setDragOverIdx(null);
-                          setDragOverPos(null);
-                        }}
-                        onDrop={() => {
-                          if (dragSourceIdx != null) {
-                            const target = dragOverPos === "below" ? idx + 1 : idx;
-                            handleDropReorder(dragSourceIdx, target);
-                          }
-                          setDragSourceIdx(null);
-                          setDragOverIdx(null);
-                          setDragOverPos(null);
-                        }}
-                        onMoveToFlow={() => setMoveCopyTarget({ mode: "move", step })}
-                        onCopyToFlow={() => setMoveCopyTarget({ mode: "copy", step })}
-                        disableActions={running}
-                        onClick={() => onEditStep(step.id)}
-                      />
-                    );
-                  })}
-              </div>
+              <SortedStepList
+                steps={detail.steps}
+                displayRun={displayRun}
+                running={running}
+                runningStepPosition={runningStepPosition}
+                live={live}
+                projectVarNames={projectVarNames}
+                sensors={sensors}
+                activeDragId={activeDragId}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+                onDragCancel={() => setActiveDragId(null)}
+                onEditStep={onEditStep}
+                onMoveStep={(step) => setMoveCopyTarget({ mode: "move", step })}
+                onCopyStep={(step) => setMoveCopyTarget({ mode: "copy", step })}
+              />
               <div className="flow-add-step">
                 <button className="ghost small" onClick={onAddStep}>+ Add step</button>
                 {lastRun && !running && (
@@ -501,8 +475,127 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
   );
 }
 
+/**
+ * Encapsulates the dnd-kit machinery for the FlowCard step list so the parent
+ * `FlowCard` body stays readable. Renders the sortable list + the floating
+ * DragOverlay (a polished preview that follows the cursor with a lifted
+ * shadow). `activeDragId` drives which row's preview the overlay renders.
+ */
+function SortedStepList(props: {
+  steps: FlowStep[];
+  displayRun: FlowRun | null;
+  running: boolean;
+  runningStepPosition: number | null;
+  live: LiveStepProgress | null;
+  projectVarNames: string[];
+  sensors: ReturnType<typeof useSensors>;
+  activeDragId: string | null;
+  onDragStart: (event: DragStartEvent) => void;
+  onDragEnd: (event: DragEndEvent) => void;
+  onDragCancel: () => void;
+  onEditStep: (id: string) => void;
+  onMoveStep: (step: FlowStep) => void;
+  onCopyStep: (step: FlowStep) => void;
+}) {
+  const {
+    steps,
+    displayRun,
+    running,
+    runningStepPosition,
+    live,
+    projectVarNames,
+    sensors,
+    activeDragId,
+    onDragStart,
+    onDragEnd,
+    onDragCancel,
+    onEditStep,
+    onMoveStep,
+    onCopyStep,
+  } = props;
+  const sorted = useMemo(
+    () => [...steps].sort((a, b) => a.position - b.position),
+    [steps]
+  );
+  const sortedIds = useMemo(() => sorted.map((s) => s.id), [sorted]);
+  const activeStep = activeDragId
+    ? sorted.find((s) => s.id === activeDragId) ?? null
+    : null;
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragCancel={onDragCancel}
+    >
+      <SortableContext items={sortedIds} strategy={verticalListSortingStrategy}>
+        <div className="step-list">
+          {sorted.map((step, idx, arr) => {
+            const allResults =
+              displayRun?.stepResults.filter((r) => r.stepId === step.id) ?? [];
+            const result = allResults[0] ?? null;
+            const iterationResults = step.forEach
+              ? allResults
+                  .filter((r) => r.iterationIndex != null)
+                  .sort(
+                    (a, b) => (a.iterationIndex ?? 0) - (b.iterationIndex ?? 0)
+                  )
+              : [];
+            const isRunningStep =
+              running && runningStepPosition === step.position;
+            const isQueued = running && !result && !isRunningStep;
+            const earlier = arr.slice(0, idx);
+            const brokenVarRefs = checkStepVarRefs(
+              step,
+              earlier,
+              projectVarNames
+            );
+            return (
+              <StepRow
+                key={step.id}
+                id={step.id}
+                position={step.position}
+                method={step.method}
+                url={step.url}
+                description={step.description}
+                extractions={step.extractions
+                  .map((e) => e.saveAs)
+                  .filter(Boolean)}
+                forEach={step.forEach}
+                iterationResults={iterationResults}
+                result={result}
+                runState={
+                  isRunningStep ? "running" : isQueued ? "queued" : "idle"
+                }
+                liveAttempt={isRunningStep ? live : null}
+                brokenVarRefs={brokenVarRefs}
+                dragDisabled={running}
+                onMoveToFlow={() => onMoveStep(step)}
+                onCopyToFlow={() => onCopyStep(step)}
+                disableActions={running}
+                onClick={() => onEditStep(step.id)}
+              />
+            );
+          })}
+        </div>
+      </SortableContext>
+      <DragOverlay dropAnimation={{ duration: 220, easing: "cubic-bezier(0.18, 0.67, 0.45, 1)" }}>
+        {activeStep ? (
+          <StepDragPreview
+            position={activeStep.position}
+            method={activeStep.method}
+            url={activeStep.url}
+            description={activeStep.description}
+          />
+        ) : null}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
 function StepRow(props: {
-  index: number;
+  id: string;
   position: number;
   method: string;
   url: string;
@@ -514,22 +607,14 @@ function StepRow(props: {
   runState?: "idle" | "running" | "queued";
   liveAttempt?: LiveStepProgress | null;
   brokenVarRefs: string[];
-  dragSourceIdx: number | null;
-  dragOverIdx: number | null;
-  dragOverPos: "above" | "below" | null;
   dragDisabled: boolean;
-  onDragStart: () => void;
-  onDragOver: (pos: "above" | "below") => void;
-  onDragLeave: () => void;
-  onDragEnd: () => void;
-  onDrop: () => void;
   onMoveToFlow: () => void;
   onCopyToFlow: () => void;
   disableActions: boolean;
   onClick: () => void;
 }) {
   const {
-    index,
+    id,
     position,
     method,
     url,
@@ -541,20 +626,29 @@ function StepRow(props: {
     runState = "idle",
     liveAttempt,
     brokenVarRefs,
-    dragSourceIdx,
-    dragOverIdx,
-    dragOverPos,
     dragDisabled,
-    onDragStart,
-    onDragOver,
-    onDragLeave,
-    onDragEnd,
-    onDrop,
     onMoveToFlow,
     onCopyToFlow,
     disableActions,
     onClick,
   } = props;
+  // dnd-kit sortable hook — drives the smooth slide-out-of-the-way animation
+  // when another row is dragged across this one, and exposes the listeners
+  // that the grip handle binds to so click-to-edit on the rest of the row
+  // is unaffected.
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+    isSorting,
+  } = useSortable({ id, disabled: dragDisabled });
+  const sortableStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
   const [iterationsOpen, setIterationsOpen] = useState(false);
   // Iteration summary derived from per-iteration step_results rows.
   // `iterationCount` is the same across every row of the same iteration set —
@@ -593,12 +687,6 @@ function StepRow(props: {
       : ok === null
       ? "—"
       : result?.statusCode ?? "OK";
-  const isDragging = dragSourceIdx === index;
-  const isDropTarget = dragOverIdx === index && dragSourceIdx !== null && dragSourceIdx !== index;
-  const showAbove =
-    isDropTarget && dragOverPos === "above" && dragSourceIdx !== index - 1;
-  const showBelow =
-    isDropTarget && dragOverPos === "below" && dragSourceIdx !== index + 1;
   const rowClass = [
     "step-row",
     ok === false && !skipped ? "step-failed" : "",
@@ -606,57 +694,30 @@ function StepRow(props: {
     runState === "running" && isRetry ? "step-retrying" : "",
     runState === "queued" ? "step-queued" : "",
     isDragging ? "step-dragging" : "",
-    showAbove ? "step-drop-above" : "",
-    showBelow ? "step-drop-below" : "",
+    isSorting && !isDragging ? "step-sorting" : "",
   ]
     .filter(Boolean)
     .join(" ");
   return (
     <div
+      ref={setNodeRef}
+      style={sortableStyle}
       className={rowClass}
       onClick={onClick}
-      onDragOver={(e) => {
-        if (dragSourceIdx == null || dragDisabled) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        const rect = e.currentTarget.getBoundingClientRect();
-        const midY = rect.top + rect.height / 2;
-        onDragOver(e.clientY < midY ? "above" : "below");
-      }}
-      onDragLeave={(e) => {
-        // Only fire when leaving the row entirely (not when entering a child)
-        const related = e.relatedTarget as Node | null;
-        if (related && e.currentTarget.contains(related)) return;
-        onDragLeave();
-      }}
-      onDrop={(e) => {
-        if (dragSourceIdx == null || dragDisabled) return;
-        e.preventDefault();
-        onDrop();
-      }}
     >
-      <div
+      <button
+        type="button"
         className="step-grip"
-        draggable={!dragDisabled}
-        onDragStart={(e) => {
-          if (dragDisabled) {
-            e.preventDefault();
-            return;
-          }
-          e.stopPropagation();
-          e.dataTransfer.effectAllowed = "move";
-          // Firefox requires data to start a drag
-          try { e.dataTransfer.setData("text/plain", String(position)); } catch {}
-          onDragStart();
-        }}
-        onDragEnd={(e) => { e.stopPropagation(); onDragEnd(); }}
+        {...attributes}
+        {...listeners}
         onClick={(e) => e.stopPropagation()}
-        title={dragDisabled ? "Cannot reorder while running" : "Drag to reorder"}
-        aria-label="Drag to reorder step"
+        disabled={dragDisabled}
+        title={dragDisabled ? "Cannot reorder while running" : "Drag to reorder · Space to grab"}
+        aria-label={`Reorder step ${position}`}
       >
-        <span className="step-grip-dots" aria-hidden>⋮⋮</span>
-        <div className="step-num">{position}</div>
-      </div>
+        <GripIcon />
+        <span className="step-num">{position}</span>
+      </button>
       <div className="step-main">
         <div className="step-line">
           <span className={`pill ${statusClass}`}>{pillText}</span>
