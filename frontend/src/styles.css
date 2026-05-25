@@ -1660,42 +1660,65 @@ input::placeholder { color: var(--muted-2); }
   flex-shrink: 0;
 }
 
-/* Tiny vertical micro-stack on the left of each step row: ▲ / position / ▼
-   so users can reorder steps without dragging. */
-.step-reorder {
+/* Drag handle on the left of each step row — grab the dots to drag, the
+   number badge inside it doubles as the position indicator. Only the grip
+   is draggable; the rest of the row is the click-to-edit target + drop zone. */
+.step-grip {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   flex-shrink: 0;
-}
-.step-reorder-up,
-.step-reorder-down {
-  width: 22px;
-  height: 18px;
-  padding: 0;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--muted);
+  padding: 2px 4px;
   border-radius: var(--r-sm);
-  font-size: 9px;
-  line-height: 1;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+  cursor: grab;
+  user-select: none;
+  color: var(--muted-2);
+  transition: background var(--t-fast), color var(--t-fast);
 }
-.step-reorder-up:hover:not(:disabled),
-.step-reorder-down:hover:not(:disabled) {
+.step-grip:hover {
   background: var(--panel-3);
   color: var(--text);
-  border-color: var(--border-strong);
 }
-.step-reorder-up:disabled,
-.step-reorder-down:disabled {
-  opacity: 0.25;
+.step-grip:active { cursor: grabbing; }
+.step-grip[draggable="false"] {
   cursor: not-allowed;
+  opacity: 0.5;
 }
+.step-grip-dots {
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: -2px;
+  font-weight: 700;
+  display: block;
+}
+
+/* While a row is being dragged, fade it so users see "this is moving". */
+.step-row.step-dragging {
+  opacity: 0.4;
+  background: var(--panel-2);
+}
+
+/* Drop indicator: a 2px accent line above/below the hovered row showing
+   where the dragged step will land. Implemented with a pseudo-element so
+   layout doesn't shift on hover. */
+.step-row.step-drop-above,
+.step-row.step-drop-below {
+  position: relative;
+}
+.step-row.step-drop-above::before,
+.step-row.step-drop-below::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: var(--accent, #4f8cff);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.step-row.step-drop-above::before { top: -2px; }
+.step-row.step-drop-below::after { bottom: -2px; }
 
 /* Hover-revealed move/copy buttons. Sit between step-main and step-edit-hint. */
 .step-actions {
