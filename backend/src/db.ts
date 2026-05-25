@@ -301,6 +301,16 @@ function initSchema(d: DatabaseSync): void {
   ensureColumn(d, "flow_steps", "for_each_config_json", "for_each_config_json TEXT");
   ensureColumn(d, "step_results", "iteration_index", "iteration_index INTEGER");
   ensureColumn(d, "step_results", "iteration_count", "iteration_count INTEGER");
+
+  // Phase 1.19 — nested for-each (up to 4 levels). JSON arrays of integers; NULL
+  // for non-iterating and depth-1 rows (which keep using iteration_index/_count).
+  ensureColumn(d, "step_results", "iteration_path_json", "iteration_path_json TEXT");
+  ensureColumn(d, "step_results", "iteration_path_count_json", "iteration_path_count_json TEXT");
+
+  // Phase 1.19.1 — the URL actually fetched after {{var}} substitution. NULL for
+  // skipped rows and for pre-1.19.1 rows.
+  ensureColumn(d, "step_results", "resolved_url", "resolved_url TEXT");
+  ensureColumn(d, "prereq_step_results", "resolved_url", "resolved_url TEXT");
 }
 
 function migrateFromJsonIfNeeded(d: DatabaseSync): void {

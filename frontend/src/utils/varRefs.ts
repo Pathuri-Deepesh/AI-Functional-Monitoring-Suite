@@ -49,6 +49,12 @@ export function extractionsBefore(earlierSteps: (FlowStep | PrereqStep)[]): stri
  * Returns the list of {{var}} names the step references that are NOT available
  * at runtime — i.e. not in the project pool and not extracted by any earlier
  * step. Empty array = step is wired correctly.
+ *
+ * Phase 1.19: walks the chain of earlier for-each steps in `earlierSteps` and
+ * adds each loop's `itemVarName` to the known set when it is in the current
+ * step's nesting scope — i.e. its array source roots through an outer loop's
+ * item that's already in scope. This lets a depth-3 step reference
+ * `{{student.id}}`, `{{subject.id}}`, AND `{{mark.id}}` without warnings.
  */
 export function checkStepVarRefs(
   step: FlowStep | PrereqStep,
@@ -58,9 +64,30 @@ export function checkStepVarRefs(
   const refs = stepVarRefs(step);
   if (refs.length === 0) return [];
   const known = new Set<string>([...projectVarNames, ...extractionsBefore(earlierSteps)]);
-  // Phase 1.18: if this step iterates, its loop-local item name is in scope
-  // (even though no earlier step "extracts" it). `{{student.id}}` resolves to
-  // a field of the per-iteration item — the root `student` should be known.
+
+  // Walk earlier steps in order and maintain a stack of itemVarNames currently
+  // in scope. A for-each step joins the stack iff its array root matches an
+  // already-stacked itemVarName; otherwise it starts a new stack. A
+  // non-iterating step clears the stack (lexical scope ends).
+  let scopeStack: string[] = [];
+  for (const s of earlierSteps) {
+    const fe = "forEach" in s ? s.forEach : null;
+    if (!fe) {
+      scopeStack = [];
+      continue;
+    }
+    const root = fe.arrayVarName.split(".")[0];
+    const matchIdx = scopeStack.indexOf(root);
+    if (matchIdx >= 0) {
+      scopeStack = scopeStack.slice(0, matchIdx + 1);
+      scopeStack.push(fe.itemVarName);
+    } else {
+      scopeStack = [fe.itemVarName];
+    }
+  }
+  for (const v of scopeStack) if (v && v.trim()) known.add(v.trim());
+
+  // This step's own loop-local item is also in scope while it executes.
   if ("forEach" in step && step.forEach && step.forEach.itemVarName.trim()) {
     known.add(step.forEach.itemVarName.trim());
   }

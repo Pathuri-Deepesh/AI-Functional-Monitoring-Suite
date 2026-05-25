@@ -32,6 +32,18 @@ interface BaseProps {
   onError?: (msg: string) => void;
 }
 
+/**
+ * Phase 1.19 — for-each array-source candidate. Either a top-level array
+ * variable extracted by an earlier step, or an outer loop's item (which gives
+ * access to the item's array-valued fields via dotted path).
+ */
+type ArrayVarCandidate =
+  | { kind: "extracted"; name: string; from: string }
+  | { kind: "loopItem"; rootVar: string; loopStepPosition: number; depth: number };
+
+/** Phase 1.19 — total HTTP call budget per flow run (mirrors backend constant). */
+const TOTAL_CALL_CAP = 10_000;
+
 const METHODS: HttpMethod[] = ["GET", "POST", "PUT", "PATCH"];
 const BODY_TYPES: { value: BodyType; label: string; hint: string }[] = [
   { value: "none", label: "None", hint: "No request body" },
@@ -203,25 +215,69 @@ export function StepEditorForm(
     return list;
   })();
 
-  // Phase 1.18 — for-each support data
-  // (a) is some OTHER step in the flow already a for-each step? (single-level guard)
-  // (b) candidate array variables (extractions whose JSONPath uses `[*]`)
-  const otherForEachStep = flow.steps.find(
-    (s) => (!step || s.id !== step.id) && s.forEach != null
-  );
-  const arrayVarCandidates = (() => {
-    const list: { name: string; from: string }[] = [];
+  // Phase 1.19 — for-each candidate sources for THIS step. Two flavors:
+  //   (a) "extracted": top-level array variables captured by earlier steps
+  //   (b) "loopItem":  outer for-each loops whose item is in scope right here
+  // The loopItem stack is the same lexical walk the backend's assertForEachDepth
+  // and varRefs.checkStepVarRefs perform — it ensures the picker only shows
+  // outer loops that the runner will actually have in scope.
+  const arrayVarCandidates: ArrayVarCandidate[] = (() => {
+    const out: ArrayVarCandidate[] = [];
+    let scopeStack: { itemVarName: string; loopStepPosition: number }[] = [];
     for (const s of flow.steps) {
       if (step && s.id === step.id) break;
+      // (a) [*] extractions
       for (const ex of s.extractions) {
         if (!ex.saveAs.trim()) continue;
         if (ex.source !== "body") continue;
         if (ex.path.includes("[*]")) {
-          list.push({ name: ex.saveAs, from: `step ${s.position}` });
+          out.push({ kind: "extracted", name: ex.saveAs, from: `step ${s.position}` });
         }
       }
+      // (b) loop-scope tracking — mirror the runner's nesting walk
+      if (s.forEach) {
+        const root = s.forEach.arrayVarName.split(".")[0];
+        const idx = scopeStack.findIndex((f) => f.itemVarName === root);
+        if (idx >= 0) scopeStack = scopeStack.slice(0, idx + 1);
+        else scopeStack = [];
+        scopeStack.push({ itemVarName: s.forEach.itemVarName, loopStepPosition: s.position });
+      } else {
+        scopeStack = [];
+      }
     }
-    return list;
+    for (let i = 0; i < scopeStack.length; i++) {
+      const f = scopeStack[i];
+      out.push({
+        kind: "loopItem",
+        rootVar: f.itemVarName,
+        loopStepPosition: f.loopStepPosition,
+        depth: i + 1,
+      });
+    }
+    return out;
+  })();
+
+  // Phase 1.19 — compute this step's nesting depth (1..4) so the editor can
+  // show the right badge and the combinatorial-call estimate.
+  const computedForEachDepth = (() => {
+    if (!forEach || !forEach.arrayVarName.trim()) return 1;
+    const root = forEach.arrayVarName.trim().split(".")[0];
+    // Re-walk to find which outer loop this would join, if any.
+    let scopeStack: string[] = [];
+    for (const s of flow.steps) {
+      if (step && s.id === step.id) break;
+      if (s.forEach) {
+        const r = s.forEach.arrayVarName.split(".")[0];
+        const idx = scopeStack.indexOf(r);
+        if (idx >= 0) scopeStack = scopeStack.slice(0, idx + 1);
+        else scopeStack = [];
+        scopeStack.push(s.forEach.itemVarName);
+      } else {
+        scopeStack = [];
+      }
+    }
+    const idx = scopeStack.indexOf(root);
+    return idx >= 0 ? Math.min(idx + 2, 4) : 1;
   })();
 
   async function submit(e: React.FormEvent) {
@@ -398,12 +454,7 @@ export function StepEditorForm(
           forEach={forEach}
           setForEach={setForEach}
           arrayVarCandidates={arrayVarCandidates}
-          locked={!!otherForEachStep}
-          lockedReason={
-            otherForEachStep
-              ? `Step ${otherForEachStep.position} in this flow already has for-each enabled (only one per flow).`
-              : null
-          }
+          computedDepth={computedForEachDepth}
         />
       )}
 
@@ -530,51 +581,64 @@ function ExtractionsEditor(props: { extractions: Extraction[]; setExtractions: (
 }
 
 // =============================================================
-// For-each editor (Phase 1.18)
+// For-each editor (Phase 1.18 + 1.19 nested)
 // =============================================================
 function ForEachEditor(props: {
   forEach: ForEachConfig | null;
   setForEach: (v: ForEachConfig | null) => void;
-  arrayVarCandidates: { name: string; from: string }[];
-  locked: boolean;
-  lockedReason: string | null;
+  arrayVarCandidates: ArrayVarCandidate[];
+  computedDepth: number;
 }) {
-  const { forEach, setForEach, arrayVarCandidates, locked, lockedReason } = props;
+  const { forEach, setForEach, arrayVarCandidates, computedDepth } = props;
   const enabled = forEach != null;
+  // "extracted" / "loopItem:<rootVar>" / "" — controls which sub-input shows
+  const initialMode = (() => {
+    if (!forEach) return "";
+    const root = forEach.arrayVarName.trim().split(".")[0];
+    const fromLoop = arrayVarCandidates.find(
+      (c) => c.kind === "loopItem" && c.rootVar === root
+    );
+    if (fromLoop) return `loopItem:${root}`;
+    return "extracted";
+  })();
+  const [mode, setMode] = useState<string>(initialMode);
 
   function enable() {
-    setForEach({
-      arrayVarName: arrayVarCandidates[0]?.name ?? "",
-      itemVarName: "item",
-    });
+    const first = arrayVarCandidates[0];
+    if (first?.kind === "extracted") {
+      setForEach({ arrayVarName: first.name, itemVarName: "item" });
+      setMode("extracted");
+    } else if (first?.kind === "loopItem") {
+      setForEach({ arrayVarName: `${first.rootVar}.`, itemVarName: "item" });
+      setMode(`loopItem:${first.rootVar}`);
+    } else {
+      setForEach({ arrayVarName: "", itemVarName: "item" });
+      setMode("extracted");
+    }
   }
   function update(patch: Partial<ForEachConfig>) {
     if (!forEach) return;
     setForEach({ ...forEach, ...patch });
   }
 
+  const extractedCandidates = arrayVarCandidates.filter((c) => c.kind === "extracted") as Extract<ArrayVarCandidate, { kind: "extracted" }>[];
+  const loopItemCandidates = arrayVarCandidates.filter((c) => c.kind === "loopItem") as Extract<ArrayVarCandidate, { kind: "loopItem" }>[];
+
+  // Combinatorial-call estimate: min(TOTAL_CAP, 100^depth)
+  const estimateMax = Math.min(TOTAL_CALL_CAP, Math.pow(100, computedDepth));
+
   return (
     <>
       <p className="sub small">
-        Run this step once per element of an array captured by an earlier step. Useful for monitoring
-        a dynamic fleet — e.g. <code>{`GET /students`}</code> → <code>{`GET /students/{{student.id}}/grades`}</code> per student.
+        Run this step once per element of an array — captured by an earlier step OR by an outer loop's
+        item. Nest up to <strong>4 levels deep</strong> (e.g. students → subjects → marks → reports).
+        Failed iterations don't stop the flow.
       </p>
-
-      {locked && (
-        <div className="step-foreach-warning">
-          ⚠ {lockedReason}
-        </div>
-      )}
 
       {!enabled && (
         <div className="empty-inline" style={{ flexDirection: "column", gap: 10, alignItems: "flex-start" }}>
           <span>For-each is off. This step runs exactly once per flow run.</span>
-          <button
-            type="button"
-            className="ghost small"
-            onClick={enable}
-            disabled={locked}
-          >
+          <button type="button" className="ghost small" onClick={enable}>
             + Enable for-each
           </button>
         </div>
@@ -582,70 +646,131 @@ function ForEachEditor(props: {
 
       {enabled && forEach && (
         <>
+          <div className="step-foreach-depth-row">
+            <span className={`step-foreach-depth-badge depth-${computedDepth}`}>
+              depth {computedDepth} of 4
+            </span>
+          </div>
+
           <Field
-            label="Iterate over variable"
-            hint="Pick an array variable extracted by an earlier step (its JSONPath should use [*])."
+            label="Iterate over"
+            hint="Pick an array source. Either a top-level extracted [*] variable, or an outer loop's item (then point at one of its array fields)."
           >
-            {arrayVarCandidates.length > 0 ? (
+            <select
+              value={mode}
+              onChange={(e) => {
+                const v = e.target.value;
+                setMode(v);
+                if (v === "extracted") {
+                  update({ arrayVarName: extractedCandidates[0]?.name ?? "" });
+                } else if (v.startsWith("loopItem:")) {
+                  const root = v.slice("loopItem:".length);
+                  // Pre-fill with `rootVar.` so the user just types the field name
+                  update({ arrayVarName: `${root}.` });
+                }
+              }}
+            >
+              <option value="" disabled>— pick a source —</option>
+              {extractedCandidates.length > 0 && (
+                <optgroup label="From earlier extractions">
+                  {extractedCandidates.map((c) => (
+                    <option key={`ex:${c.name}`} value="extracted">
+                      {c.name} ({c.from})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {loopItemCandidates.length > 0 && (
+                <optgroup label="From outer loop items">
+                  {loopItemCandidates.map((c) => (
+                    <option key={`li:${c.rootVar}`} value={`loopItem:${c.rootVar}`}>
+                      {`{{${c.rootVar}.…}}`} (step {c.loopStepPosition}, depth {c.depth})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </Field>
+
+          {mode === "extracted" && extractedCandidates.length > 0 && (
+            <Field label="Variable" hint="A [*] extraction from an earlier step.">
               <select
                 value={forEach.arrayVarName}
                 onChange={(e) => update({ arrayVarName: e.target.value })}
-                disabled={locked}
               >
-                <option value="">— select a variable —</option>
-                {arrayVarCandidates.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {v.name} ({v.from})
+                <option value="">— select —</option>
+                {extractedCandidates.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name} ({c.from})
                   </option>
                 ))}
               </select>
-            ) : (
+            </Field>
+          )}
+
+          {mode === "extracted" && extractedCandidates.length === 0 && (
+            <Field label="Variable name" hint="Add a [*] extraction in an earlier step, or type the name here.">
               <input
                 type="text"
                 placeholder="students"
                 value={forEach.arrayVarName}
                 onChange={(e) => update({ arrayVarName: e.target.value })}
-                disabled={locked}
               />
-            )}
-          </Field>
+            </Field>
+          )}
 
-          {arrayVarCandidates.length === 0 && (
-            <div className="sub small" style={{ marginTop: -6 }}>
-              No array-typed variables detected yet. Add an extraction with a JSONPath like{" "}
-              <code>$.data[*]</code> in an earlier step, then come back here.
-            </div>
+          {mode.startsWith("loopItem:") && (
+            <Field
+              label="Field path"
+              hint="Type the array-valued field on the outer loop's item, e.g. student.subjects."
+            >
+              <input
+                type="text"
+                placeholder="student.subjects"
+                value={forEach.arrayVarName}
+                onChange={(e) => update({ arrayVarName: e.target.value })}
+              />
+            </Field>
           )}
 
           <Field
             label="Loop item name"
-            hint='Templates inside this step use {{name.field}} per iteration. Default "item".'
+            hint='Templates inside this step use {{name.field}} per iteration. e.g. "subject" → {{subject.id}}.'
           >
             <input
               type="text"
-              placeholder="student"
+              placeholder="subject"
               value={forEach.itemVarName}
               onChange={(e) => update({ itemVarName: e.target.value })}
-              disabled={locked}
             />
           </Field>
 
-          <div className="sub small">
-            This step will run once per element of the array, up to a max of <strong>100</strong> iterations.
-            Failed iterations don't stop the flow — you'll see <code>N ok / M failed</code> on the result row.
+          <div className="step-foreach-estimate">
+            This step will run up to <strong>~{estimateMax.toLocaleString()}</strong> times per flow
+            run (depth {computedDepth} × 100/level cap). The first {TOTAL_CALL_CAP.toLocaleString()} calls
+            always execute; further iterations are truncated and flagged on the result row.
           </div>
 
           <div style={{ marginTop: 12 }}>
             <button
               type="button"
               className="ghost small destructive"
-              onClick={() => setForEach(null)}
-              disabled={locked}
+              onClick={() => {
+                setForEach(null);
+                setMode("");
+              }}
             >
               Disable for-each
             </button>
           </div>
         </>
+      )}
+
+      {arrayVarCandidates.length === 0 && !enabled && (
+        <div className="sub small" style={{ marginTop: 6 }}>
+          No array sources detected yet. Add a <code>[*]</code> extraction in an earlier step (e.g.
+          JSONPath <code>$.data[*]</code>) to enable for-each.
+        </div>
       )}
     </>
   );

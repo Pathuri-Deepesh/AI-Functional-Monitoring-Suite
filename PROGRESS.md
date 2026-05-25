@@ -171,6 +171,40 @@
 - [x] **16.22** Prereq banner now shows live `Step N of M` + completed count + retry chip + filling progress bar — *2026-05-22*
 - [x] **16.23** FlowCard "Run now" lifts the prereq runId so `PrereqsPanel` attaches and shows its full step-by-step progress UI (matching panel's own Run-now behaviour) — *2026-05-22*
 
+## Phase 1.19 — Nested for-each (up to 4 levels deep) ✅ Complete
+
+- [x] **19.1** Backend `types.ts`: `ForEachConfig` doc updated for dotted-path `arrayVarName`; `StepResult.iterationPath` + `iterationPathCount` (nested-iteration tracking) — *2026-05-25*
+- [x] **19.2** Backend `db.ts`: idempotent migrations for `iteration_path_json` + `iteration_path_count_json` columns on `step_results` — *2026-05-25*
+- [x] **19.3** Backend `extraction.ts`: new `Scope` / `ScopeStack` types; `substitute()` + `resolveVar()` walk innermost-first so inner loops shadow outer scopes — *2026-05-25*
+- [x] **19.4** Backend `store.ts`: `assertSingleForEach` replaced by `assertForEachDepth` (static scope-stack walk, ≤4 nesting cap) — wired into add/update/copy/move — *2026-05-25*
+- [x] **19.5** Backend `store.ts`: `normalizeForEach` now accepts dotted-path `arrayVarName` (e.g. `student.subjects`); `recordStepResult` + `rowToStepResult` persist/parse `iteration_path*` JSON columns — *2026-05-25*
+- [x] **19.6** Backend `flowRunner.ts`: `LiveStepProgress.forEachPath` + `forEachTotalPath`; new `TOTAL_CALL_CAP = 10_000` constant — *2026-05-25*
+- [x] **19.7** Backend `flowRunner.ts`: top-level `for` → `while` driver; new `computeAbsorbedBlock()` walks contiguous for-each steps whose `arrayVarName` roots through an in-scope loop var (depth ≤ 4) — *2026-05-25*
+- [x] **19.8** Backend `flowRunner.ts`: new `runForEachBlock()` recursive runner — per-iteration `ScopeStack` push/pop, direct-child recursion, depth-1 rows keep `iteration_index/_count` for back-compat, depth >1 rows write `iteration_path[_count]` — *2026-05-25*
+- [x] **19.9** Backend `flowRunner.ts`: total-call-budget guard (`TOTAL_CALL_CAP`) — emits a `Truncated: total call cap (10,000) reached` sentinel row and short-circuits the current branch when the budget is exhausted — *2026-05-25*
+- [x] **19.10** Frontend `types.ts`: mirror backend — `StepResult.iterationPath/iterationPathCount`, `LiveStepProgress.forEachPath/forEachTotalPath`, `ForEachConfig` doc — *2026-05-25*
+- [x] **19.11** Frontend `varRefs.ts`: `checkStepVarRefs` now walks ALL earlier for-each steps; lexical scope-stack pushes/pops match the runner so nested `{{student.id}}` + `{{subject.id}}` + `{{mark.id}}` all resolve without false-warning chips — *2026-05-25*
+- [x] **19.12** Frontend `flowForms.tsx`: `ForEachEditor` rewritten — grouped `<optgroup>` dropdown (extracted vars vs outer-loop items), depth badge (1..4 with color), pre-filled `student.` text input when picking a loop item — *2026-05-25*
+- [x] **19.13** Frontend `flowForms.tsx`: combinatorial-call banner — *"This step will run up to ~10,000 times per flow run (depth × 100/level cap). First 10,000 always execute; further iterations are truncated."* — live recomputed from `computeForEachDepth` — *2026-05-25*
+- [x] **19.14** Frontend `flowForms.tsx`: removed the `locked` single-level guard (multi-loop now allowed); dropped the warning banner — *2026-05-25*
+- [x] **19.15** Frontend `FlowCard.tsx`: loop-pill gets `depth-{1..4}` class (teal/violet/amber/rose accents) + tooltip naming the outer scope; live progress label shows full path (`iteration 3/10 → 7/12 → 2/8`) — *2026-05-25*
+- [x] **19.16** Frontend `FlowCard.tsx`: new `IterationTree` component — chevron-expandable per-level breadcrumb header, left-edge color stripe per depth, 16px indent per level, branch-level ok/fail aggregation, surfaces `⚠ truncated at 10,000` chip when budget hit — *2026-05-25*
+- [x] **19.17** Frontend `FlowCard.tsx`: `computeForEachDepth` helper mirrors the backend's static scope-stack walk so the depth pill color stays in sync with the runner's actual nesting — *2026-05-25*
+- [x] **19.18** Frontend `styles.css`: `.step-foreach-pill.depth-{1..4}`, `.step-foreach-depth-badge`, `.step-foreach-estimate` banner, `.step-iter-tree` + `.step-iter-children` + `.step-iter-level-{1..4}` + `.step-iter-node.fail` + `.step-iter-breadcrumb` — *2026-05-25*
+- [x] **19.19** Build clean: `npx tsc -b` on backend; `npx tsc -b && npx vite build` on frontend — zero warnings — *2026-05-25*
+
+## Phase 1.19.1 — Resolved URL per iteration row ✅ Complete
+
+- [x] **19.1.1** Backend `types.ts`: new `StepResult.resolvedUrl: string | null` (the URL actually fetched after `{{var}}` substitution; NULL for skipped/sentinel rows) — *2026-05-25*
+- [x] **19.1.2** Backend `db.ts`: idempotent `ensureColumn` migration for `resolved_url TEXT` on both `step_results` and `prereq_step_results` — *2026-05-25*
+- [x] **19.1.3** Backend `store.ts`: row interfaces extended; `rowToStepResult` + `rowToPrereqStepResult` map the new column; `recordStepResult` + `recordPrereqStepResult` accept + persist `resolvedUrl` (25-col / 21-col INSERTs) — *2026-05-25*
+- [x] **19.1.4** Backend `flowRunner.ts`: success-path `recordStepResult` calls (per-iteration in `runForEachBlock` + non-iter in `executeRun`) pass `resolvedUrl: resolved.url`; sentinel paths intentionally leave it null — *2026-05-25*
+- [x] **19.1.5** Backend `prereqRunner.ts`: success-path `recordPrereqStepResult` passes `resolvedUrl: resolved.url`; cache-skip + upstream-failed sentinels leave it null — *2026-05-25*
+- [x] **19.1.6** Frontend `types.ts`: mirror — `StepResult.resolvedUrl: string \| null` — *2026-05-25*
+- [x] **19.1.7** Frontend `FlowCard.tsx` `IterNodeView`: render `ownRow.resolvedUrl` as a monospace truncated line under the iteration breadcrumb (with full URL on hover) when present — *2026-05-25*
+- [x] **19.1.8** Frontend `styles.css`: new `.step-iter-node > .iter-url` (monospace, muted, ellipsis-truncate, 28px left-pad to align under the breadcrumb status row) — *2026-05-25*
+- [x] **19.1.9** Build clean (backend + frontend tsc + vite); depth-2 demo re-run end-to-end confirms 17/17 rows now carry the resolved URL (e.g. `/student/std-3/subject/sub-3-english`) — *2026-05-25*
+
 ## Phase 1.18.2 — Production-grade drag-and-drop (dnd-kit) ✅ Complete
 
 - [x] **18.2.1** Added `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities` dependencies — *2026-05-25*

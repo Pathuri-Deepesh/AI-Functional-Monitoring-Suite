@@ -159,10 +159,14 @@ export interface Extraction {
 }
 
 /**
- * Phase 1.18 — for-each iteration over a prior step's array response.
+ * For-each iteration over a prior step's array response.
  * When set on a FlowStep, the step runs once per element of `arrayVarName`
- * (capped at 100 server-side). The current element is bound to `itemVarName`
- * so templates like `{{student.id}}` resolve per iteration.
+ * (capped at 100 per level server-side; 10,000 total per run). The current
+ * element is bound to `itemVarName` so templates like `{{student.id}}` resolve
+ * per iteration.
+ *
+ * Phase 1.19: `arrayVarName` may be a dotted path against an outer loop's
+ * item (e.g. `student.subjects`) to nest loops up to 4 levels deep.
  */
 export interface ForEachConfig {
   arrayVarName: string;
@@ -236,11 +240,25 @@ export interface StepResult {
   ok: boolean;
   checkedAt: number;
   /**
-   * Phase 1.18 — non-null on iteration rows of a for-each step. `iterationIndex`
-   * is 0..N-1; `iterationCount` is N (the same on every row of the same iteration set).
+   * Phase 1.18 — non-null on depth-1 iteration rows. `iterationIndex` is 0..N-1;
+   * `iterationCount` is N (same on every row of the same iteration set).
+   * Phase 1.19: NULL on depth >1 rows — use `iterationPath` instead.
    */
   iterationIndex: number | null;
   iterationCount: number | null;
+  /**
+   * Phase 1.19 — 0-indexed path through nested loops (e.g. `[2, 0, 3]` =
+   * "3rd outer × 1st mid × 4th inner"). NULL for non-iterating rows and
+   * depth-1 rows (which use `iterationIndex` for back-compat).
+   */
+  iterationPath: number[] | null;
+  /** Phase 1.19 — per-level totals matching `iterationPath` (e.g. `[10, 12, 8]`). */
+  iterationPathCount: number[] | null;
+  /**
+   * Phase 1.19.1 — the URL actually fetched after {{var}} substitution.
+   * NULL for skipped/sentinel rows and for pre-1.19.1 rows.
+   */
+  resolvedUrl: string | null;
 }
 
 /**
@@ -257,10 +275,17 @@ export interface LiveStepProgress {
   lastErrorReason: string | null;
   phase: "executing" | "backoff";
   nextRetryAtMs: number | null;
-  /** Phase 1.18 — 1-indexed iteration counter during a for-each step. null when not iterating. */
+  /** Phase 1.18 — 1-indexed iteration counter during a depth-1 for-each step. null when not iterating. */
   forEachIteration?: number | null;
   /** Phase 1.18 — total iterations being run (already clamped to the 100 cap). */
   forEachTotal?: number | null;
+  /**
+   * Phase 1.19 — 1-indexed nested-iteration path (e.g. `[3, 7, 2]` = "outer iter 3,
+   * mid iter 7, inner iter 2"). Always populated when iterating (depth ≥ 1).
+   */
+  forEachPath?: number[] | null;
+  /** Phase 1.19 — per-level totals matching `forEachPath` (e.g. `[10, 12, 8]`). */
+  forEachTotalPath?: number[] | null;
 }
 
 export interface FlowRun {

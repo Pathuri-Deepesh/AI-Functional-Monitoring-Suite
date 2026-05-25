@@ -167,15 +167,18 @@ export interface Extraction {
 }
 
 /**
- * Phase 1.18 — for-each iteration.
+ * Phase 1.18 / 1.19 — for-each iteration.
  * When set on a FlowStep, the step is executed once per element of the array stored
  * in `arrayVarName` (resolved at run time). Each iteration binds the current element
  * to `itemVarName` so the step's URL/body/headers can reference `{{item.id}}` etc.
- * Hard server-side cap of 100 iterations; failed iterations don't stop the loop or
- * the flow. Single-level only — one for-each step max per flow.
+ *
+ * Phase 1.19 lifts the 1.18 single-level constraint: `arrayVarName` may now be a
+ * dotted path against an outer loop's item (e.g. `student.subjects`). When detected,
+ * the runner absorbs the dependent suffix into a nested block — up to 4 levels deep.
+ * Per-level cap remains 100; a run-wide cap of 10,000 calls protects against blow-up.
  */
 export interface ForEachConfig {
-  /** Name of an array-typed variable extracted by an earlier step (e.g. `students`). */
+  /** Name of an array-typed variable (e.g. `students`) OR a dotted path against an outer loop's item (e.g. `student.subjects`). */
   arrayVarName: string;
   /** Loop-local name bound to the current element (e.g. `student` → `{{student.id}}`). */
   itemVarName: string;
@@ -258,12 +261,28 @@ export interface StepResult {
   ok: boolean;
   checkedAt: number;
   /**
-   * Phase 1.18 — for-each iteration tracking. NULL for non-iterating steps
-   * (every step pre-1.18). For iterating steps, `iterationIndex` is 0..N-1
+   * Phase 1.18 — flat single-level iteration tracking. NULL for non-iterating steps
+   * (every step pre-1.18). For depth-1 iterating steps, `iterationIndex` is 0..N-1
    * and `iterationCount` is N (the same on every iteration row of the same step).
+   * For depth >1 (Phase 1.19 nested) rows, these are NULL; use `iterationPath` instead.
    */
   iterationIndex: number | null;
   iterationCount: number | null;
+  /**
+   * Phase 1.19 — nested-iteration tracking. `iterationPath` is the 0-indexed path
+   * through the nested loops (e.g. `[2, 0, 3]` = "3rd outer × 1st mid × 4th inner").
+   * `iterationPathCount` is the per-level totals (e.g. `[10, 12, 8]`). NULL for
+   * non-iterating rows and for depth-1 rows (which still use `iterationIndex`).
+   */
+  iterationPath: number[] | null;
+  iterationPathCount: number[] | null;
+  /**
+   * Phase 1.19.1 — the URL actually fetched after {{var}} substitution. Lets the
+   * iteration tree show e.g. `/student/std-2/subject/sub-2-math` per leaf instead
+   * of just the un-substituted template. NULL for skipped/sentinel rows and for
+   * pre-1.19.1 rows.
+   */
+  resolvedUrl: string | null;
 }
 
 export interface FlowRun {

@@ -154,33 +154,51 @@ function walk(
  * Phase 1.18: `vars` may now contain object values (a for-each iteration item
  * bound to its loop-local name). Templates like `{{student.id}}` walk the dotted
  * path against the object. Flat lookup still wins when the exact key exists.
+ *
+ * Phase 1.19: also accepts a `ScopeStack` (array of scopes, innermost last) so
+ * nested for-each iterations can shadow outer scope bindings. Bare `Record`
+ * inputs are wrapped as `[vars]` — call sites unchanged.
  */
+export type Scope = Record<string, unknown>;
+export type ScopeStack = Scope[];
+
 export function substitute(
   template: string,
-  vars: Record<string, unknown>
+  vars: Scope | ScopeStack
 ): string {
   if (!template || template.indexOf("{{") === -1) return template;
+  const stack: ScopeStack = Array.isArray(vars) ? vars : [vars];
   return template.replace(/\{\{\s*([a-zA-Z_][\w.-]*)\s*\}\}/g, (_match, name) => {
-    const resolved = resolveVar(vars, name);
+    const resolved = resolveVar(stack, name);
     return resolved != null ? toScalar(resolved) : `{{${name}}}`;
   });
 }
 
-function resolveVar(vars: Record<string, unknown>, name: string): unknown {
-  // Flat lookup wins — preserves pre-1.18 behavior for non-dotted names
-  // and for scalar vars whose keys happen to contain dots.
-  if (Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null) {
-    return vars[name];
-  }
-  // Dotted walk: e.g. "student.id" → vars["student"] then .id.
+/**
+ * Resolve `name` against the scope stack: walk innermost → outermost, and within
+ * each scope try a flat lookup first, then dotted-path walk. The first scope that
+ * binds the root identifier wins (so an inner loop's `student` correctly shadows
+ * any outer-scope `student`).
+ */
+export function resolveVar(stack: ScopeStack, name: string): unknown {
   const parts = name.split(".");
-  if (parts.length < 2) return undefined;
-  let cur: any = vars[parts[0]];
-  for (let i = 1; i < parts.length; i++) {
-    if (cur == null) return undefined;
-    cur = cur[parts[i]];
+  const root = parts[0];
+  for (let s = stack.length - 1; s >= 0; s--) {
+    const vars = stack[s];
+    // Flat lookup wins inside this scope (preserves pre-1.18 behavior for keys
+    // that happen to contain dots).
+    if (Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null) {
+      return vars[name];
+    }
+    if (!Object.prototype.hasOwnProperty.call(vars, root)) continue;
+    let cur: any = vars[root];
+    for (let i = 1; i < parts.length; i++) {
+      if (cur == null) return undefined;
+      cur = cur[parts[i]];
+    }
+    if (cur != null) return cur;
   }
-  return cur;
+  return undefined;
 }
 
 function toScalar(v: unknown): string {
