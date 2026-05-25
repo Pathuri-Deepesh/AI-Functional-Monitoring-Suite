@@ -1660,65 +1660,128 @@ input::placeholder { color: var(--muted-2); }
   flex-shrink: 0;
 }
 
-/* Drag handle on the left of each step row — grab the dots to drag, the
-   number badge inside it doubles as the position indicator. Only the grip
-   is draggable; the rest of the row is the click-to-edit target + drop zone. */
+/* =========================================================================
+   Drag-to-reorder (dnd-kit) — production-grade UX
+   - Grip = focusable button with the six-dot icon + position badge stacked
+   - Source row fades while dragged; other rows slide smoothly out of the way
+     (dnd-kit drives the transform/transition on the row itself)
+   - Floating DragOverlay preview lifts above the page with a soft shadow +
+     slight scale, follows the cursor exactly
+   ========================================================================= */
 .step-grip {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   flex-shrink: 0;
-  padding: 2px 4px;
+  padding: 4px 4px;
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted-2);
   cursor: grab;
   user-select: none;
-  color: var(--muted-2);
-  transition: background var(--t-fast), color var(--t-fast);
+  touch-action: none; /* dnd-kit requires this so touch drags don't scroll */
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast);
 }
-.step-grip:hover {
+.step-grip:hover:not(:disabled) {
   background: var(--panel-3);
   color: var(--text);
+  border-color: var(--border);
 }
-.step-grip:active { cursor: grabbing; }
-.step-grip[draggable="false"] {
+.step-grip:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.step-grip:active:not(:disabled) { cursor: grabbing; }
+.step-grip:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.45;
 }
-.step-grip-dots {
-  font-size: 10px;
-  line-height: 1;
-  letter-spacing: -2px;
-  font-weight: 700;
+.step-grip-icon {
+  fill: currentColor;
   display: block;
+  transition: fill var(--t-fast);
 }
 
-/* While a row is being dragged, fade it so users see "this is moving". */
+/* Source row while it's being dragged: dim it almost completely. The real
+   visual representation is the floating DragOverlay preview. */
 .step-row.step-dragging {
-  opacity: 0.4;
+  opacity: 0.35;
   background: var(--panel-2);
 }
 
-/* Drop indicator: a 2px accent line above/below the hovered row showing
-   where the dragged step will land. Implemented with a pseudo-element so
-   layout doesn't shift on hover. */
-.step-row.step-drop-above,
-.step-row.step-drop-below {
-  position: relative;
+/* Rows that aren't being dragged but are being sorted around — they need
+   the cursor to be the default pointer (not grab) and pointer-events
+   stays active so they can act as drop targets via collision detection. */
+.step-row.step-sorting {
+  cursor: default;
 }
-.step-row.step-drop-above::before,
-.step-row.step-drop-below::after {
-  content: "";
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  height: 2px;
-  background: var(--accent, #4f8cff);
-  border-radius: 1px;
+
+/* Floating drag preview rendered inside <DragOverlay>. Mimics the real row
+   but stripped-down: method tag + URL + position. Elevated with a soft
+   shadow + slight scale + faint border so it feels like it's lifted off
+   the page. dnd-kit positions this absolutely under the cursor. */
+.step-drag-preview {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: var(--s-3) var(--s-3);
+  background: var(--panel-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  box-shadow:
+    0 12px 24px -8px rgba(0, 0, 0, 0.45),
+    0 4px 8px -2px rgba(0, 0, 0, 0.25),
+    0 0 0 1px var(--accent-soft);
+  transform: scale(1.02) rotate(-0.4deg);
+  cursor: grabbing;
+  min-width: 320px;
+  max-width: min(640px, 90vw);
+  font-size: var(--text-sm);
+  color: var(--text);
   pointer-events: none;
+  /* Slight backdrop blur so the preview reads cleanly over whatever
+     content is underneath it. */
+  backdrop-filter: blur(2px);
 }
-.step-row.step-drop-above::before { top: -2px; }
-.step-row.step-drop-below::after { bottom: -2px; }
+.step-drag-preview-grip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 4px;
+  color: var(--accent);
+}
+.step-drag-preview-grip .step-grip-icon { fill: currentColor; }
+.step-drag-preview-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+.step-drag-preview-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.step-drag-preview-url {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--text-sm);
+}
+.step-drag-preview-desc {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 /* Hover-revealed move/copy buttons. Sit between step-main and step-edit-hint. */
 .step-actions {
