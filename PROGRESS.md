@@ -171,6 +171,16 @@
 - [x] **16.22** Prereq banner now shows live `Step N of M` + completed count + retry chip + filling progress bar — *2026-05-22*
 - [x] **16.23** FlowCard "Run now" lifts the prereq runId so `PrereqsPanel` attaches and shows its full step-by-step progress UI (matching panel's own Run-now behaviour) — *2026-05-22*
 
+## Phase 1.18.1 — Drag-and-drop step reorder (replaces ▲/▼ arrows) ✅ Complete
+
+- [x] **18.1.1** Frontend `FlowCard.tsx`: parent-level DnD state (`dragSourceIdx` / `dragOverIdx` / `dragOverPos`) + `handleDropReorder(fromIdx, toIdx)` (splice + `insertAt = fromIdx < toIdx ? toIdx - 1 : toIdx` offset math) with optimistic UI swap + rollback on API failure — *2026-05-25*
+- [x] **18.1.2** Frontend `FlowCard.tsx` StepRow: replaced `.step-reorder` ▲/▼ buttons with `.step-grip` (grip dots + position number). Only the grip is `draggable`; the rest of the row is the click-to-edit target + drop zone. Row-level `onDragOver` computes above/below by cursor Y vs row midpoint — *2026-05-25*
+- [x] **18.1.3** Frontend `PrereqsPanel.tsx`: mirrored the same DnD treatment — `handleDropReorder` + `PrereqStepRow` grip + row drop handlers — *2026-05-25*
+- [x] **18.1.4** Frontend `styles.css`: removed `.step-reorder*` blocks; added `.step-grip` (cursor grab → grabbing, fades to `not-allowed` while running), `.step-dragging` (opacity 0.4 on source row), `.step-drop-above` / `.step-drop-below` (2px accent insertion line via `::before` / `::after` so layout doesn't shift) — *2026-05-25*
+- [x] **18.1.5** Drop indicator suppresses no-op hovers: if dragging row N hovers row N's own above-line or row N-1's below-line, the line doesn't render (since the drop would be identity) — *2026-05-25*
+- [x] **18.1.6** Smoke test: `POST /api/flows/:id/steps/reorder` with swapped order against the for-each demo flow on Default project; verified order flipped + restored cleanly — *2026-05-25*
+- [x] **18.1.7** Build clean: `npx tsc -b && npx vite build` zero warnings — *2026-05-25*
+
 ## Phase 1.18 — For-each step (dynamic-fleet iteration) ✅ Complete
 
 - [x] **18.1** Backend `types.ts`: new `ForEachConfig` interface + `forEach?: ForEachConfig | null` on `FlowStep` — *2026-05-22*
@@ -247,6 +257,13 @@
 ---
 
 ## Recent activity
+
+### 2026-05-25 — Phase 1.18.1 Drag-and-drop step reorder (7 items)
+- **Why:** manager reversed the Phase 1.17 ▲/▼ arrow decision and asked for "drag and drop, convenient, easy, smooth UX within the flow". Arrows worked but felt clumsy at >3 steps — DnD lets the user jump position 7 → position 1 in one gesture instead of six clicks.
+- **Implementation:** native HTML5 DnD (no extra dep). Only the leftmost `.step-grip` (grip dots + position number) is `draggable`; the rest of the row is the click-to-edit target + drop zone. Row-level `onDragOver` splits the row at its vertical midpoint to compute "above" vs "below" insertion. A 2px accent line drawn via `::before` / `::after` shows where the dragged step will land — and is suppressed for no-op hovers (dragging row N onto its own boundary). Drop applies an optimistic order swap then `POST /flows/:id/steps/reorder`, rolling back on failure.
+- **Mirrored across both panels:** same DnD code path in `FlowCard.tsx` and `PrereqsPanel.tsx`, sharing identical CSS classes (`.step-grip`, `.step-dragging`, `.step-drop-above/below`). Disabled during `running` so no reordering mid-run.
+- **CSS cleanup:** removed `.step-reorder`, `.step-reorder-up`, `.step-reorder-down` blocks entirely (no longer used).
+- Smoke-tested against the live backend on the for-each demo flow; reorder API confirmed working with swapped step IDs.
 
 ### 2026-05-22 — Phase 1.18 For-each iteration (18 items)
 - **Why it matters for a monitoring tool:** a flow can now monitor a *dynamic fleet*. A single step `GET /students/{{student.id}}/grades` runs once per element of an array captured by an earlier step. When a new student is added to the DB tomorrow, that student is automatically included — no flow edit required. And when student #37 breaks, the result is `(50) ✓ 49 / ✗ 1` with a chevron-expandable per-iteration breakdown instead of one opaque 500.
