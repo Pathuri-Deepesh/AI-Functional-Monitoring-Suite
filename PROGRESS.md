@@ -193,6 +193,33 @@
 - [x] **19.18** Frontend `styles.css`: `.step-foreach-pill.depth-{1..4}`, `.step-foreach-depth-badge`, `.step-foreach-estimate` banner, `.step-iter-tree` + `.step-iter-children` + `.step-iter-level-{1..4}` + `.step-iter-node.fail` + `.step-iter-breadcrumb` — *2026-05-25*
 - [x] **19.19** Build clean: `npx tsc -b` on backend; `npx tsc -b && npx vite build` on frontend — zero warnings — *2026-05-25*
 
+## Phase 1.20 — Manual "Check now" buttons + read-only audit ✅ Complete
+
+- [x] **20.1** Backend `audit.ts`: stripped the `options.refresh` block (and the `options` parameter) from `runAuditAndDeliver`; removed `checkAllInProject` + `runFlow` imports. Snapshot/Report is now strictly READ-ONLY — *2026-05-25*
+- [x] **20.2** Backend `index.ts`: dropped `req.query.refresh === "true"` parsing from `POST /api/projects/:id/audit`; manager-mandated separation of "trigger" vs "report" — *2026-05-25*
+- [x] **20.3** Backend `index.ts`: new `POST /api/projects/:id/check-urls` reusing `checkAllInProject(id, 8)`; returns `{ checked, ok, failed, durationMs }` — *2026-05-25*
+- [x] **20.4** Backend `index.ts`: new `POST /api/projects/:id/check-all` — prereqs first (sequential, they capture tokens), then standalone URLs + enabled flows in parallel; continues even if prereqs fail; returns `{ durationMs, prereqs, urls, flows }` — *2026-05-25*
+- [x] **20.5** Frontend `api.ts`: new `checkAllUrls(projectId)` + `checkEntireProject(projectId)` helpers + their typed result interfaces (`CheckUrlsResult` / `CheckAllResult`) — *2026-05-25*
+- [x] **20.6** Frontend `App.tsx`: `handleCheckAllUrls` + `handleCheckEntireProject` mirroring the `handleRunAudit` pattern; busy state per-project (`busyCheckUrls` / `busyFullCheck`); toast on completion summarising counts + duration; auto-refresh on success — *2026-05-25*
+- [x] **20.7** Frontend `ProjectView.tsx`: **Button 1 "⚡ Check all now"** added inside a new `.method-chips-row` flex wrapper, right of the HTTP method chips; disabled when `urls.length === 0` — *2026-05-25*
+- [x] **20.8** Frontend `ProjectView.tsx`: **Button 2 "⚡ Run full check"** added in `.hero-actions` to the LEFT of `📊 Snapshot & report` (now demoted to default button styling); cog + delete remain at the far right — *2026-05-25*
+- [x] **20.9** Frontend `styles.css`: new `.method-chips-row` (flex row, `space-between`, wraps on narrow widths) + `.check-all-urls-btn` (no-shrink, no-wrap) so the chips bar and the trigger share a single line — *2026-05-25*
+- [x] **20.10** Build clean: `npx tsc -b` (backend) + `npx tsc -b && npx vite build` (frontend) — zero warnings; bundle 336KB JS / 63KB CSS (gzip 100KB / 11KB) — *2026-05-25*
+
+## Phase 1.20.1 — "Run full check" live progress orchestration ✅ Complete
+
+Manager feedback after Phase 1.20 demo: *"when i click 'run full check', ux is not responding, it shd run the prereq n then the flows one by one right so that user will know its running, but its blank, its nit userfriendly"*. The single blocking `/check-all` endpoint was doing all the work server-side; the frontend just sat on a spinner until everything finished. Rewired the button to a client-side orchestrator that drives existing async kickoff + poll endpoints — every phase now lights up in real time in the matching panel/card.
+
+- [x] **20.1.1** Frontend `FlowCard.tsx`: new `externalRunId?: string | null` prop + `useEffect` that, when set, calls `handleRun({ runId, skipPrereqs: true })` to attach to a parent-orchestrated flow run without re-kicking it off — mirrors the existing PrereqsPanel pattern — *2026-05-27*
+- [x] **20.1.2** Frontend `FlowCard.tsx`: `handleRun` refactored to accept `{ runId?, skipPrereqs? }` — when `runId` is supplied the kickoff is skipped and we poll the existing run; the "Run now" button now wraps with `() => handleRun()` so the MouseEvent isn't passed as opts — *2026-05-27*
+- [x] **20.1.3** Frontend `ProjectView.tsx`: new orchestrator state (`fullCheckBusy`, `fullCheckPhase`, `orchestratorFlowRunId`) + `runFullCheckOrchestrator()` — phase 1 runs prereqs (sets `externalPrereqRunId` so PrereqsPanel shows live progress), phase 2 kicks off URLs in parallel while iterating enabled flows one at a time (sets `orchestratorFlowRunId` so the matching FlowCard attaches and shows step-by-step) — *2026-05-27*
+- [x] **20.1.4** Frontend `ProjectView.tsx`: new `FullCheckBanner` sub-component — sticky banner at top of main panel, phase-aware (🔑 Refreshing prerequisites → 🔗 Checking URLs + running flows → 📋 Running flow X of Y: "Login" → ✓ Full check complete) with inline spinner — *2026-05-27*
+- [x] **20.1.5** Frontend `ProjectView.tsx`: `FlowsSectionPanel` threads `orchestratorFlowRunId` to the matching `FlowCard` (matched by flowId) — when null, no card is attached; when set, exactly one card shows live step-by-step progress — *2026-05-27*
+- [x] **20.1.6** Frontend `App.tsx`: removed `handleCheckEntireProject` + `busyFullCheck` state + `checkEntireProject` import (the single-shot backend call is no longer used by the button); ProjectView now receives `onAfterFullCheck` (refresh hook) + `onToast` (for the completion summary toast) — *2026-05-27*
+- [x] **20.1.7** Frontend `styles.css`: new `.full-check-banner` (sticky top, blue→violet gradient backdrop, 6px blur, fade-in keyframes, lifted shadow) + `.full-check-banner-icon` / `-body` / `-label` / `-detail` — *2026-05-27*
+- [x] **20.1.8** Backend `POST /api/projects/:id/check-all` kept intact for non-interactive callers (scripts/cron) but no longer the UI's path — the UI now drives the same work through visible per-phase async endpoints — *2026-05-27*
+- [x] **20.1.9** Build clean: `npx tsc -b` (backend) + `npx tsc -b && npx vite build` (frontend) — zero warnings; bundle 339KB JS / 64KB CSS (gzip 100KB / 11KB) — *2026-05-27*
+
 ## Phase 1.19.1 — Resolved URL per iteration row ✅ Complete
 
 - [x] **19.1.1** Backend `types.ts`: new `StepResult.resolvedUrl: string | null` (the URL actually fetched after `{{var}}` substitution; NULL for skipped/sentinel rows) — *2026-05-25*
