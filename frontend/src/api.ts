@@ -182,9 +182,36 @@ export async function fetchSparkline(
   );
 }
 
-// ---- Audit (Check All) ----
+// ---- Audit (Snapshot & report — strictly read-only) ----
 export async function runAudit(projectId: string): Promise<AuditResult> {
   return jsonOrThrow(await fetch(`${BASE}/projects/${projectId}/audit`, { method: "POST" }));
+}
+
+// ---- Manual check triggers ----
+export interface CheckUrlsResult {
+  checked: number;
+  ok: number;
+  failed: number;
+  durationMs: number;
+}
+
+export interface CheckAllResult {
+  durationMs: number;
+  prereqs: { ok: boolean; totalMs: number | null } | null;
+  urls: { checked: number; ok: number };
+  flows: { ran: number; ok: number };
+}
+
+export async function checkAllUrls(projectId: string): Promise<CheckUrlsResult> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/check-urls`, { method: "POST" })
+  );
+}
+
+export async function checkEntireProject(projectId: string): Promise<CheckAllResult> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/check-all`, { method: "POST" })
+  );
 }
 
 // ---- Flows ----

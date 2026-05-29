@@ -9,8 +9,6 @@ import {
   listFlowsByProject,
   listUrlsByProject,
 } from "./store.js";
-import { checkAllInProject } from "./monitor.js";
-import { runFlow } from "./flowRunner.js";
 import { renderReportHtml } from "./report.js";
 import { sendAuditToSlack } from "./slack.js";
 import type { Flow, FlowRun, UrlStats } from "./types.js";
@@ -33,33 +31,23 @@ export interface AuditResult {
 }
 
 /**
- * Run an audit on a project:
- *   1. (optional) Re-check every URL + re-run every enabled flow when refresh=true
- *   2. Generate an HTML report from the current saved state
- *   3. Deliver via Slack (Block Kit + file upload if bot token; webhook fallback)
+ * Run an audit on a project — strictly READ-ONLY:
+ *   1. Generate an HTML report from the current saved state (no re-checks)
+ *   2. Deliver via Slack (Block Kit + file upload if bot token; webhook fallback)
  *
- * Default `refresh=false` = snapshot of what the UI currently shows (fast).
- * Pass `refresh=true` to force a full re-run before the report — used by the
- * scheduler or any caller that wants the freshest possible numbers.
+ * The audit never triggers fresh checks. Use the dedicated check endpoints
+ * (POST /api/projects/:id/check-urls or /check-all) to refresh state first
+ * if the latest numbers matter.
  */
 export async function runAuditAndDeliver(
   projectId: string,
   reportsDir: string,
-  baseUrl = "http://localhost:4000",
-  options: { refresh?: boolean } = {}
+  baseUrl = "http://localhost:4000"
 ): Promise<AuditResult> {
   const project = getProject(projectId);
   if (!project) throw new Error("Project not found");
 
-  // 1. Optionally re-check URLs + re-run flows in parallel before snapshotting.
-  if (options.refresh) {
-    const urlsTask = checkAllInProject(projectId, 8);
-    const flows = listFlowsByProject(projectId).filter((f) => f.enabled);
-    const flowRunsTask = Promise.all(flows.map((f) => runFlow(f.id)));
-    await Promise.all([urlsTask, flowRunsTask]);
-  }
-
-  // 2. Load URLs + per-URL stats + sparklines (24h window) for the report
+  // Load URLs + per-URL stats + sparklines (24h window) for the report
   const urls = listUrlsByProject(projectId);
   const stats: Record<string, UrlStats> = {};
   for (const u of urls) stats[u.id] = getUrlStats(u.id, 24 * 60);
@@ -68,21 +56,21 @@ export async function runAuditAndDeliver(
     sparklines[u.id] = getUrlSparkline(u.id, 24 * 60, 24).map((p) => p.avgLatencyMs ?? 0);
   }
 
-  // 3. Load flows + their latest runs for the report
+  // Load flows + their latest runs for the report
   const flowSummaries: Array<{ flow: Flow; latestRun: FlowRun | null }> = [];
   for (const f of listFlowsByProject(projectId)) {
     const runs = listFlowRuns(f.id, 1);
     flowSummaries.push({ flow: f, latestRun: runs[0] ?? null });
   }
 
-  // 4. Render HTML
+  // Render HTML
   const html = renderReportHtml({ project, urls, stats, sparklines, flowSummaries });
   const filename = `${slugify(project.name)}-${stamp()}-${randomUUID().slice(0, 8)}.html`;
   const reportPath = join(reportsDir, filename);
   writeFileSync(reportPath, html, "utf8");
   const reportUrl = `${baseUrl}/reports/${filename}`;
 
-  // 5. Aggregate counts
+  // Aggregate counts
   const failingUrls = urls.filter(
     (u) => u.statusGroup === "error" || u.statusGroup === "5xx" || u.statusGroup === "4xx"
   ).length;
@@ -92,7 +80,7 @@ export async function runAuditAndDeliver(
   const okFlows = flowSummaries.filter((s) => s.latestRun?.ok === true).length;
   const totalFlows = flowSummaries.length;
 
-  // 6. Slack delivery
+  // Slack delivery
   const slack = await sendAuditToSlack({
     project,
     urls,

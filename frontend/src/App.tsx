@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  checkAllUrls,
   checkUrlNow,
   deleteFlow,
   deleteProject,
@@ -122,6 +123,7 @@ export default function App() {
   const [modal, setModal] = useState<ModalState>({ kind: "none" });
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [busyCheckUrls, setBusyCheckUrls] = useState<string | null>(null);
   const toastSeq = useRef(0);
   const timer = useRef<number | null>(null);
   /**
@@ -377,6 +379,29 @@ export default function App() {
     }
   }
 
+  async function handleCheckAllUrls() {
+    if (!activeProject || busyCheckUrls) return;
+    setBusyCheckUrls(activeProject.id);
+    try {
+      const r = await checkAllUrls(activeProject.id);
+      await refresh();
+      setRefreshTick((t) => t + 1);
+      pushToast(
+        `Checked ${r.checked} URL${r.checked === 1 ? "" : "s"} — ${r.ok} ok, ${r.failed} failed (${r.durationMs}ms)`,
+        r.failed === 0 ? "success" : "error"
+      );
+    } catch (e) {
+      pushToast(e instanceof Error ? `Check failed: ${e.message}` : "Check failed", "error");
+    } finally {
+      setBusyCheckUrls(null);
+    }
+  }
+
+  async function handleAfterFullCheck() {
+    await refresh();
+    setRefreshTick((t) => t + 1);
+  }
+
   async function handleFormDone(message?: string) {
     setModal({ kind: "none" });
     if (message) pushToast(message);
@@ -418,6 +443,10 @@ export default function App() {
           }
           onRunAudit={handleRunAudit}
           auditRunning={modal.kind === "audit-running"}
+          onCheckAllUrls={handleCheckAllUrls}
+          checkAllUrlsBusy={busyCheckUrls === activeProject.id}
+          onAfterFullCheck={handleAfterFullCheck}
+          onToast={pushToast}
           onCheckUrl={handleCheckUrl}
           onRemoveUrl={handleDeleteUrl}
           onCreateFlow={() => setModal({ kind: "create-flow", project: activeProject })}

@@ -51,7 +51,7 @@ import {
   updateUrl,
 } from "./store.js";
 import { uploadPath } from "./paths.js";
-import { checkOne, snapshot, startMonitorLoop } from "./monitor.js";
+import { checkAllInProject, checkOne, snapshot, startMonitorLoop } from "./monitor.js";
 import { runAuditAndDeliver } from "./audit.js";
 import { getLiveStepProgress as getLiveFlowStep, kickoffFlow, runFlow } from "./flowRunner.js";
 import {
@@ -235,26 +235,91 @@ app.get("/api/urls/:id/sparkline", (req, res) => {
   res.json(getUrlSparkline(req.params.id, windowMinutes, buckets));
 });
 
-// ---------- Audit ----------
-// Default = snapshot the current state into a report (fast).
-// Pass ?refresh=true to re-check every URL + re-run every flow first.
+// ---------- Audit (READ-ONLY) ----------
+// Snapshots the current state of every URL + flow into an HTML report
+// and posts to Slack. Never triggers fresh checks — that's what the
+// dedicated /check-urls and /check-all endpoints are for.
 app.post("/api/projects/:id/audit", async (req, res) => {
   const project = getProject(req.params.id);
   if (!project) {
     res.status(404).json({ error: "Project not found" });
     return;
   }
-  const refresh = req.query.refresh === "true";
   try {
-    const result = await runAuditAndDeliver(project.id, REPORTS_DIR, undefined, { refresh });
+    const result = await runAuditAndDeliver(project.id, REPORTS_DIR, undefined);
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
   }
 });
 
-app.get("/api/projects/:id/check-all", async (_req, res) => {
-  res.status(405).json({ error: "Use POST /api/projects/:id/audit" });
+// ---------- Manual check triggers ----------
+// "Check all standalone URLs now" — fires every URL in the project in parallel
+// (concurrency-capped). Ignores flows and prereqs. Used by the toolbar button
+// under the search bar.
+app.post("/api/projects/:id/check-urls", async (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  const startedAt = Date.now();
+  try {
+    const results = await checkAllInProject(project.id, 8);
+    const ok = results.filter(
+      (r) => r.statusGroup === "2xx" || r.statusGroup === "3xx"
+    ).length;
+    const failed = results.length - ok;
+    res.json({
+      checked: results.length,
+      ok,
+      failed,
+      durationMs: Date.now() - startedAt,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+// "Run full check" — prereqs first (sequential, they capture tokens),
+// then standalone URLs + every enabled flow in parallel. Continues even if
+// prereqs fail so the operator sees the full picture.
+app.post("/api/projects/:id/check-all", async (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  const startedAt = Date.now();
+  try {
+    let prereqRun: { ok: boolean; totalMs: number | null } | null = null;
+    if (project.prereqEnabled) {
+      const prereqSteps = listPrereqSteps(project.id);
+      if (prereqSteps.length > 0) {
+        const run = await runPrereqChain(project.id);
+        prereqRun = run ? { ok: run.ok, totalMs: run.totalMs } : null;
+      }
+    }
+
+    const urlsTask = checkAllInProject(project.id, 8);
+    const flows = listFlowsByProject(project.id).filter((f) => f.enabled);
+    const flowsTask = Promise.all(flows.map((f) => runFlow(f.id)));
+    const [urlResults, flowRuns] = await Promise.all([urlsTask, flowsTask]);
+
+    const urlsOk = urlResults.filter(
+      (r) => r.statusGroup === "2xx" || r.statusGroup === "3xx"
+    ).length;
+    const flowsOk = flowRuns.filter((r) => r?.ok === true).length;
+
+    res.json({
+      durationMs: Date.now() - startedAt,
+      prereqs: prereqRun,
+      urls: { checked: urlResults.length, ok: urlsOk },
+      flows: { ran: flowRuns.length, ok: flowsOk },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 // ---------- Flows ----------

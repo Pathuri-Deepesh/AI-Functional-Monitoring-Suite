@@ -56,3 +56,7 @@ backend/data/*.sqlite-wal
 
 # Local smoke-test scratch (curl -o run3.json etc.) — never commit
 run*.json
+
+# Postman CLI scaffolding (local-only, not part of the suite)
+.postman/
+postman/

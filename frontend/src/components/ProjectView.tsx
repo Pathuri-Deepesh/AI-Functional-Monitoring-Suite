@@ -4,7 +4,17 @@ import { KpiBar } from "./KpiBar";
 import { TimeRangeSelector } from "./TimeRangeSelector";
 import { FlowCard } from "./FlowCard";
 import { PrereqsPanel } from "./PrereqsPanel";
-import { fetchSparkline, listProjectFlows } from "../api";
+import { Spinner } from "./Spinner";
+import {
+  checkAllUrls,
+  fetchFlowRun,
+  fetchPrereqRun,
+  fetchPrereqs,
+  fetchSparkline,
+  listProjectFlows,
+  runFlowAsync,
+  runPrereqsAsync,
+} from "../api";
 import type {
   Flow,
   HttpMethod,
@@ -34,6 +44,12 @@ interface Props {
   onDeleteProject: () => void;
   onRunAudit: () => void;
   auditRunning: boolean;
+  onCheckAllUrls: () => void | Promise<void>;
+  checkAllUrlsBusy: boolean;
+  /** Called after orchestrated check phases so the parent can refresh snapshot/flows. */
+  onAfterFullCheck: () => void | Promise<void>;
+  /** Lets the orchestrator surface a final summary toast. */
+  onToast: (message: string, kind?: "success" | "error" | "info") => void;
   onCheckUrl: (id: string) => void | Promise<void>;
   onRemoveUrl: (id: string) => void | Promise<void>;
   onCreateFlow: () => void;
@@ -45,6 +61,9 @@ interface Props {
   onEditPrereqStep: (step: PrereqStep, siblings: PrereqStep[]) => void;
   refreshTick: number;
 }
+
+const POLL_MS = 500;
+const POLL_TIMEOUT_MS = 5 * 60_000;
 
 type SectionTab = "urls" | "flows";
 
@@ -68,6 +87,22 @@ export function ProjectView(props: Props) {
   // runId so the PrereqsPanel above can attach to it and show the full
   // step-by-step progress UI (not just FlowCard's inline banner).
   const [externalPrereqRunId, setExternalPrereqRunId] = useState<string | null>(null);
+  // "Run full check" orchestration state — each phase visible in the matching
+  // panel/card via existing live progress UI, plus a sticky banner up top.
+  const [fullCheckBusy, setFullCheckBusy] = useState(false);
+  const [fullCheckPhase, setFullCheckPhase] = useState<
+    | { kind: "idle" }
+    | { kind: "prereqs" }
+    | { kind: "urls"; checked: number; total: number }
+    | { kind: "flow"; flowName: string; index: number; total: number }
+    | { kind: "done" }
+  >({ kind: "idle" });
+  /** flowId currently being executed by the orchestrator — FlowCard attaches via externalRunId. */
+  const [orchestratorFlowRunId, setOrchestratorFlowRunId] = useState<{
+    flowId: string;
+    runId: string;
+  } | null>(null);
+  const fullCheckAbort = useRef<{ cancelled: boolean } | null>(null);
   const [tab, setTab] = useState<SectionTab>(readTabFromHash);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -178,6 +213,145 @@ export function ProjectView(props: Props) {
     };
   }, [project.id, refreshTick, flowsTick]);
 
+  // Cancel any in-flight full-check polling when unmounting / project changes.
+  useEffect(() => {
+    return () => {
+      if (fullCheckAbort.current) fullCheckAbort.current.cancelled = true;
+    };
+  }, [project.id]);
+
+  /**
+   * "Run full check" orchestrator — visible, sequential. Each phase surfaces in
+   * the matching panel/card's existing live progress UI, plus a sticky banner.
+   *
+   * Order:
+   *   1. Prereqs (if enabled + has steps) — PrereqsPanel attaches via externalRunId.
+   *   2. URLs in parallel + flows one-at-a-time. URLs auto-refresh via snapshot
+   *      polling; each flow attaches via per-card externalRunId.
+   */
+  async function runFullCheckOrchestrator() {
+    if (fullCheckBusy) return;
+    setFullCheckBusy(true);
+    const abort = { cancelled: false };
+    fullCheckAbort.current = abort;
+    const startedAt = Date.now();
+    let prereqsOk: boolean | null = null;
+    let urlsResult: { checked: number; ok: number; failed: number } | null = null;
+    const flowResults: { name: string; ok: boolean }[] = [];
+
+    try {
+      // ===== PHASE 1: Prereqs (sequential, before everything else) =====
+      try {
+        const bundle = await fetchPrereqs(project.id);
+        if (!abort.cancelled && bundle.enabled && bundle.steps.length > 0) {
+          setFullCheckPhase({ kind: "prereqs" });
+          const { runId } = await runPrereqsAsync(project.id, { force: true });
+          setExternalPrereqRunId(runId);
+          const deadline = Date.now() + POLL_TIMEOUT_MS;
+          while (!abort.cancelled && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            if (abort.cancelled) return;
+            try {
+              const pr = await fetchPrereqRun(runId);
+              if (pr.endedAt != null) {
+                prereqsOk = pr.ok;
+                break;
+              }
+            } catch {
+              // transient — keep polling
+            }
+          }
+        }
+      } catch {
+        // Prereq fetch failure shouldn't abort the rest of the check.
+      }
+      if (abort.cancelled) return;
+
+      // ===== PHASE 2a: Kick off URL checks in parallel (don't block flows) =====
+      const enabledFlows = flows.filter((f) => f.enabled);
+      setFullCheckPhase({ kind: "urls", checked: 0, total: urls.length });
+      const urlsTask = (async () => {
+        try {
+          const r = await checkAllUrls(project.id);
+          urlsResult = { checked: r.checked, ok: r.ok, failed: r.failed };
+        } catch {
+          urlsResult = { checked: 0, ok: 0, failed: 0 };
+        }
+      })();
+
+      // ===== PHASE 2b: Flows — one at a time, visibly. =====
+      for (let i = 0; i < enabledFlows.length; i++) {
+        if (abort.cancelled) break;
+        const f = enabledFlows[i];
+        setFullCheckPhase({
+          kind: "flow",
+          flowName: f.name,
+          index: i + 1,
+          total: enabledFlows.length,
+        });
+        try {
+          const { runId } = await runFlowAsync(f.id, { force: true });
+          setOrchestratorFlowRunId({ flowId: f.id, runId });
+          const deadline = Date.now() + POLL_TIMEOUT_MS;
+          let runOk = false;
+          while (!abort.cancelled && Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            if (abort.cancelled) break;
+            try {
+              const run = await fetchFlowRun(runId);
+              if (run.endedAt != null) {
+                runOk = run.ok;
+                break;
+              }
+            } catch {
+              // transient — keep polling
+            }
+          }
+          flowResults.push({ name: f.name, ok: runOk });
+        } catch {
+          flowResults.push({ name: f.name, ok: false });
+        } finally {
+          setOrchestratorFlowRunId(null);
+        }
+      }
+
+      // Wait for the parallel URL task to settle so the toast reflects truth.
+      await urlsTask;
+      if (abort.cancelled) return;
+
+      // ===== Done — refresh + summarize =====
+      setFullCheckPhase({ kind: "done" });
+      await props.onAfterFullCheck();
+      const durMs = Date.now() - startedAt;
+      const u = urlsResult ?? { checked: 0, ok: 0, failed: 0 };
+      const flowsOk = flowResults.filter((f) => f.ok).length;
+      const prereqLabel =
+        prereqsOk === null ? "skipped" : prereqsOk ? "ok" : "fail";
+      const allOk =
+        u.failed === 0 && flowsOk === flowResults.length && prereqsOk !== false;
+      props.onToast(
+        `Full check done — URLs: ${u.ok}/${u.checked} ok, Flows: ${flowsOk}/${flowResults.length} ok, Prereqs: ${prereqLabel} (${durMs}ms)`,
+        allOk ? "success" : "error"
+      );
+    } catch (e) {
+      props.onToast(
+        e instanceof Error ? `Full check failed: ${e.message}` : "Full check failed",
+        "error"
+      );
+    } finally {
+      if (!abort.cancelled) {
+        // Brief delay so the user sees the final banner before it disappears.
+        window.setTimeout(() => {
+          if (abort.cancelled) return;
+          setFullCheckBusy(false);
+          setFullCheckPhase({ kind: "idle" });
+          setOrchestratorFlowRunId(null);
+          setExternalPrereqRunId(null);
+        }, 1200);
+      }
+    }
+  }
+
   return (
     <main className="main">
       <div className="project-hero">
@@ -203,6 +377,17 @@ export function ProjectView(props: Props) {
         <div className="hero-actions">
           <button
             className="primary"
+            onClick={runFullCheckOrchestrator}
+            disabled={fullCheckBusy}
+            title="Run prereqs (if enabled), every standalone URL, and every enabled flow right now"
+          >
+            {fullCheckBusy ? (
+              <><Spinner size={11} /><span style={{ marginLeft: 6 }}>Running full check…</span></>
+            ) : (
+              "⚡ Run full check"
+            )}
+          </button>
+          <button
             onClick={props.onRunAudit}
             disabled={props.auditRunning || urls.length === 0}
             title={
@@ -221,6 +406,8 @@ export function ProjectView(props: Props) {
           </button>
         </div>
       </div>
+
+      {fullCheckBusy && <FullCheckBanner phase={fullCheckPhase} />}
 
       <TimeRangeSelector value={windowMinutes} onChange={setWindowMinutes} />
 
@@ -306,6 +493,8 @@ export function ProjectView(props: Props) {
             onManageKeys={props.onManageKeys}
             onCheckUrl={props.onCheckUrl}
             onRemoveUrl={props.onRemoveUrl}
+            onCheckAllUrls={props.onCheckAllUrls}
+            checkAllUrlsBusy={props.checkAllUrlsBusy}
             totalPages={totalPages}
             safePage={safePage}
             setPage={setPage}
@@ -329,6 +518,7 @@ export function ProjectView(props: Props) {
             onDelete={props.onDeleteFlow}
             onAfterFlowRun={() => setFlowsTick((t) => t + 1)}
             onPrereqRunStarted={setExternalPrereqRunId}
+            orchestratorFlowRunId={orchestratorFlowRunId}
           />
         </div>
       )}
@@ -359,6 +549,8 @@ function UrlsSectionPanel(props: {
   onManageKeys: () => void;
   onCheckUrl: (id: string) => void | Promise<void>;
   onRemoveUrl: (id: string) => void | Promise<void>;
+  onCheckAllUrls: () => void | Promise<void>;
+  checkAllUrlsBusy: boolean;
   totalPages: number;
   safePage: number;
   setPage: (p: number) => void;
@@ -447,28 +639,39 @@ function UrlsSectionPanel(props: {
               </span>
             </div>
 
-            <div className="method-chips">
+            <div className="method-chips-row">
+              <div className="method-chips">
+                <button
+                  className={`method-chip ${methodFilter === "all" ? "active" : ""}`}
+                  onClick={() => setMethodFilter("all")}
+                >
+                  All <span className="chip-count">{urls.length}</span>
+                </button>
+                {(["GET", "POST", "PUT", "PATCH"] as HttpMethod[]).map((m) => {
+                  const count = methodCounts[m];
+                  if (count === 0 && methodFilter !== m) return null;
+                  return (
+                    <button
+                      key={m}
+                      className={`method-chip method-${m.toLowerCase()} ${
+                        methodFilter === m ? "active" : ""
+                      }`}
+                      onClick={() => setMethodFilter(m)}
+                    >
+                      {m} <span className="chip-count">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
               <button
-                className={`method-chip ${methodFilter === "all" ? "active" : ""}`}
-                onClick={() => setMethodFilter("all")}
+                className="primary check-all-urls-btn"
+                onClick={props.onCheckAllUrls}
+                disabled={props.checkAllUrlsBusy || urls.length === 0}
+                title="Run every standalone URL in this project right now (ignores flows + prereqs)"
               >
-                All <span className="chip-count">{urls.length}</span>
+                {props.checkAllUrlsBusy ? "Checking…" : "⚡ Check all now"}
               </button>
-              {(["GET", "POST", "PUT", "PATCH"] as HttpMethod[]).map((m) => {
-                const count = methodCounts[m];
-                if (count === 0 && methodFilter !== m) return null;
-                return (
-                  <button
-                    key={m}
-                    className={`method-chip method-${m.toLowerCase()} ${
-                      methodFilter === m ? "active" : ""
-                    }`}
-                    onClick={() => setMethodFilter(m)}
-                  >
-                    {m} <span className="chip-count">{count}</span>
-                  </button>
-                );
-              })}
             </div>
           </div>
         )}
@@ -530,8 +733,11 @@ function FlowsSectionPanel(props: {
   onDelete: (flow: Flow) => void;
   onAfterFlowRun: () => void;
   onPrereqRunStarted: (runId: string | null) => void;
+  /** When the "Run full check" orchestrator is executing a flow, this names
+   *  which flow + runId — that FlowCard attaches via its externalRunId prop. */
+  orchestratorFlowRunId: { flowId: string; runId: string } | null;
 }) {
-  const { flows, refreshTick, onCreate, onEdit, onAddStep, onEditStep, onDelete, onAfterFlowRun, onPrereqRunStarted } = props;
+  const { flows, refreshTick, onCreate, onEdit, onAddStep, onEditStep, onDelete, onAfterFlowRun, onPrereqRunStarted, orchestratorFlowRunId } = props;
 
   // Flow-level aggregate stats
   const totalFlows = flows.length;
@@ -649,6 +855,11 @@ function FlowsSectionPanel(props: {
                   onDelete={() => onDelete(f)}
                   onAfterRun={onAfterFlowRun}
                   onPrereqRunStarted={onPrereqRunStarted}
+                  externalRunId={
+                    orchestratorFlowRunId?.flowId === f.id
+                      ? orchestratorFlowRunId.runId
+                      : null
+                  }
                   refreshTick={refreshTick}
                 />
               ))}
@@ -666,6 +877,52 @@ function formatRelative(ts: number): string {
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
   return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+// =============================================================
+// "Run full check" sticky progress banner
+// =============================================================
+function FullCheckBanner(props: {
+  phase:
+    | { kind: "idle" }
+    | { kind: "prereqs" }
+    | { kind: "urls"; checked: number; total: number }
+    | { kind: "flow"; flowName: string; index: number; total: number }
+    | { kind: "done" };
+}) {
+  const { phase } = props;
+  let icon = "⚡";
+  let label = "Full check running…";
+  let detail = "";
+  if (phase.kind === "prereqs") {
+    icon = "🔑";
+    label = "Refreshing prerequisites";
+    detail = "Capturing fresh tokens before flows run…";
+  } else if (phase.kind === "urls") {
+    icon = "🔗";
+    label = "Checking standalone URLs + running flows";
+    detail = "URL pings dispatch in parallel while flows execute one at a time.";
+  } else if (phase.kind === "flow") {
+    icon = "📋";
+    label = `Running flow ${phase.index} of ${phase.total}`;
+    detail = `“${phase.flowName}” — open the Flows tab to watch step-by-step.`;
+  } else if (phase.kind === "done") {
+    icon = "✓";
+    label = "Full check complete";
+    detail = "Refreshing data…";
+  }
+  return (
+    <div className="full-check-banner" role="status" aria-live="polite">
+      <div className="full-check-banner-icon" aria-hidden>{icon}</div>
+      <div className="full-check-banner-body">
+        <div className="full-check-banner-label">
+          {phase.kind !== "done" && <Spinner size={12} />}
+          <strong>{label}</strong>
+        </div>
+        {detail && <div className="full-check-banner-detail muted small">{detail}</div>}
+      </div>
+    </div>
+  );
 }
 
 function EmptyUrls(props: {

@@ -97,10 +97,14 @@ interface Props {
    *  the PrereqsPanel above can mirror the full progress UI. Called with null
    *  once the prereq phase finishes. */
   onPrereqRunStarted?: (runId: string | null) => void;
+  /** When the "Run full check" orchestrator starts a flow run, the parent
+   *  passes that runId down so this card attaches to the same run and surfaces
+   *  the full step-by-step progress UI — no separate kickoff. */
+  externalRunId?: string | null;
   refreshTick: number;
 }
 
-export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfterRun, onPrereqRunStarted, refreshTick }: Props) {
+export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfterRun, onPrereqRunStarted, externalRunId, refreshTick }: Props) {
   const [expanded, setExpanded] = useState(true);
   const [detail, setDetail] = useState<FlowWithSteps | null>(null);
   const [lastRun, setLastRun] = useState<FlowRun | null>(null);
@@ -191,7 +195,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     };
   }, [flow.id]);
 
-  async function handleRun() {
+  async function handleRun(opts?: { runId?: string; skipPrereqs?: boolean }) {
     setRunning(true);
     setActiveRun(null);
     const abort = { cancelled: false };
@@ -200,42 +204,47 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
     try {
       // 1. Refresh prereq tokens first when the project has any. Skipped silently
       //    if prereqs are disabled or empty — flow runs straight through.
-      //    Mirrors what scheduler tick() does, but on user demand.
-      try {
-        const bundle = await fetchPrereqs(flow.projectId);
-        if (bundle.enabled && bundle.steps.length > 0) {
-          setRunPhase("prereq");
-          setPrereqProgress({ completed: 0, total: bundle.steps.length, live: null });
-          const { runId: prereqRunId } = await runPrereqsAsync(flow.projectId, { force: true });
-          // Hand the runId up so PrereqsPanel can attach to it and surface the
-          // full step-by-step progress UI in parallel with our inline banner.
-          onPrereqRunStarted?.(prereqRunId);
-          while (!abort.cancelled && Date.now() < deadline) {
-            await new Promise((r) => setTimeout(r, POLL_MS));
-            if (abort.cancelled) return;
-            try {
-              const pr = await fetchPrereqRun(prereqRunId);
-              setPrereqProgress({
-                completed: pr.stepResults.length,
-                total: bundle.steps.length,
-                live: pr.liveStep ?? null,
-              });
-              if (pr.endedAt != null) break;
-            } catch {
-              // transient — keep polling
+      //    Also skipped when the parent orchestrator handled prereqs already
+      //    (skipPrereqs=true) or when attaching to an existing runId.
+      if (!opts?.skipPrereqs && !opts?.runId) {
+        try {
+          const bundle = await fetchPrereqs(flow.projectId);
+          if (bundle.enabled && bundle.steps.length > 0) {
+            setRunPhase("prereq");
+            setPrereqProgress({ completed: 0, total: bundle.steps.length, live: null });
+            const { runId: prereqRunId } = await runPrereqsAsync(flow.projectId, { force: true });
+            // Hand the runId up so PrereqsPanel can attach to it and surface the
+            // full step-by-step progress UI in parallel with our inline banner.
+            onPrereqRunStarted?.(prereqRunId);
+            while (!abort.cancelled && Date.now() < deadline) {
+              await new Promise((r) => setTimeout(r, POLL_MS));
+              if (abort.cancelled) return;
+              try {
+                const pr = await fetchPrereqRun(prereqRunId);
+                setPrereqProgress({
+                  completed: pr.stepResults.length,
+                  total: bundle.steps.length,
+                  live: pr.liveStep ?? null,
+                });
+                if (pr.endedAt != null) break;
+              } catch {
+                // transient — keep polling
+              }
             }
           }
+        } catch {
+          // Prereq fetch/run failures shouldn't block the flow — the flow may not
+          // even use prereq vars, and if it does the user will see the resulting
+          // failure clearly.
         }
-      } catch {
-        // Prereq fetch/run failures shouldn't block the flow — the flow may not
-        // even use prereq vars, and if it does the user will see the resulting
-        // failure clearly.
       }
       if (abort.cancelled) return;
 
-      // 2. Run the flow. force=true bypasses the per-step TTL skip cache.
+      // 2. Run the flow. When attaching to a parent-started runId, skip kickoff
+      //    and poll the existing run. Otherwise kick a fresh one.
       setRunPhase("flow");
-      const { runId } = await runFlowAsync(flow.id, { force: true });
+      const runId = opts?.runId
+        ?? (await runFlowAsync(flow.id, { force: true })).runId;
       try {
         const initial = await fetchFlowRun(runId);
         if (!abort.cancelled) setActiveRun(initial);
@@ -268,6 +277,15 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
       }
     }
   }
+
+  // Attach to a run started by the "Run full check" orchestrator — surfaces the
+  // same expanded + progress UI without duplicating the runFlowAsync call. The
+  // orchestrator already handled prereqs once, so we skip them here.
+  useEffect(() => {
+    if (!externalRunId || running) return;
+    handleRun({ runId: externalRunId, skipPrereqs: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalRunId]);
 
   // Which run drives the per-step status? While running we use the live activeRun;
   // otherwise we fall back to the most recent persisted run.
@@ -334,7 +352,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
           )}
         </div>
         <div className="flow-actions">
-          <button className="ghost small btn-busy" onClick={handleRun} disabled={running || !hasSteps}>
+          <button className="ghost small btn-busy" onClick={() => handleRun()} disabled={running || !hasSteps}>
             {running ? (<><Spinner size={11} /><span>Running…</span></>) : "▶ Run now"}
           </button>
           <button className="ghost small" onClick={onEdit}>⚙ Edit</button>

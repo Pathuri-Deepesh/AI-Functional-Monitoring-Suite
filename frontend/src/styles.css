@@ -1463,6 +1463,57 @@ input::placeholder { color: var(--muted-2); }
   background: linear-gradient(90deg, rgba(245, 158, 11, 0.30), rgba(245, 158, 11, 0.20));
 }
 
+/* "Run full check" sticky orchestrator banner — surfaces overall phase while
+   each per-card / per-panel live UI surfaces the in-flight detail. */
+.full-check-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: var(--s-3) 0;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: linear-gradient(
+    90deg,
+    rgba(59, 130, 246, 0.14),
+    rgba(139, 92, 246, 0.10)
+  );
+  backdrop-filter: blur(6px);
+  border-radius: var(--r-md);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+  animation: full-check-banner-in 220ms ease-out;
+}
+@keyframes full-check-banner-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.full-check-banner-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.full-check-banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.full-check-banner-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+.full-check-banner-detail {
+  line-height: 1.3;
+}
+.full-check-banner .spinner {
+  color: #60a5fa;
+}
+
 /* Flow / prereq live-progress bar shown above the step list while a run is active */
 .flow-progress {
   position: relative;
@@ -2853,6 +2904,25 @@ textarea:focus-visible {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+/* Wraps the method-chips bar + the "Check all now" trigger so they share a row */
+.method-chips-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.method-chips-row .method-chips {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.check-all-urls-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .method-chip {
