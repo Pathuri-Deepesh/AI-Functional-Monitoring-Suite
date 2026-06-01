@@ -77,8 +77,8 @@ DAY_SUMMARIES = {
         "Users can transform data between API calls (split text, slice arrays, add fields) without writing code. The URL field now shows the final URL as you type.",
     ),
     "2026-06-01": (
-        "Added a pure Loop step, live loop progress, and a new 'concat arrays' transform.",
-        "Loop step declares 'repeat for each item' without a fake API call (~88 fewer calls per run). Loops show a live progress bar instead of 'QUEUED'. Compute step can now merge two lists (e.g. countries + regions) into one combined list to Loop together.",
+        "Added a pure Loop step, live loop progress, a 'concat arrays' transform, and the per-item version of it.",
+        "Loop = repeat without a fake API call (~88 fewer calls per run). Live loop progress bar. 'Concat arrays' merges two lists. New: 'add a merged-list field to every item' — for each campaign, merge that campaign's countries + regions into one list and Loop it. Dogfooded on the real Logitech flow.",
     ),
 }
 
@@ -673,6 +673,12 @@ TASKS = {
                "Before: rows just said '#1 ✓ 200 2936ms'. Now they say '#1 ✓ 200 2936ms /anything/US/discover'. Data was already there in the database; the rendering just dropped it for single-loop flows (nested loops already showed it)."),
     "22.2.7": ("Made click-to-copy URL work in every project, not just Logitech.",
                "User noticed clicking a URL in the Logitech flow copies it but the same gesture didn't work elsewhere. Wasn't a project-specific gate — Logitech happened to use nested loops which used a different renderer that already had the copy feature. Single-loop flows used a plain span. Now both use the same copy-on-click button."),
+    "22.3.1": ("Backend: 'merge lists per item' now actually works (the inner transform can see the item).",
+               "When the Compute step runs 'for each campaign, add a merged list of its countries + regions', the merge step needs to read fields off the CURRENT campaign. Backend now hands the current campaign into the inner step so it can find 'countries' and 'regions' on it. Older inner transforms (split text, slice, etc.) are unaffected."),
+    "22.3.2": ("Frontend: 'merge lists' is now selectable as the inner step + has its own input boxes.",
+               "Two small fixes: (a) the inner-step dropdown was filtering out 'merge lists' — un-filtered it; (b) when you pick it, the editor now shows the same 'Source list 1 / Source list 2 / + Add another list' inputs as the top-level version, plus a short explainer note."),
+    "22.3.3": ("Rewrote the live Logitech flow to use the new per-item merge (real dogfood).",
+               "Step 2 used to derive the locale via 'split text take part 0'; now Step 2 derives 'campaign.geos = countries + regions' per campaign. Step 4 iterates campaign.geos with the new URL format /campaign/{{documentId}}/{{locale}}/{{geo}}/discover. Result: 66/69 calls green; remaining 3 are real backend signal (zh-Hant locale 403s) — exactly what monitoring is for."),
 
     # ===== Pending (no date — kept for completeness) =====
     "7.6": ("Pending: get a Slack bot token (xoxb-) and paste it in Settings.",
@@ -727,7 +733,8 @@ DATE_TASKS = {
     "2026-05-29": ["21.1", "21.2", "21.3", "21.4", "21.5", "21.6", "21.7", "21.8", "21.9", "21.10", "21.11"],
     "2026-06-01": ["22.1", "22.2", "22.3", "22.4", "22.5", "22.6", "22.7",
                    "22.1.1", "22.1.2", "22.1.3",
-                   "22.2.1", "22.2.2", "22.2.3", "22.2.4", "22.2.5", "22.2.6", "22.2.7"],
+                   "22.2.1", "22.2.2", "22.2.3", "22.2.4", "22.2.5", "22.2.6", "22.2.7",
+                   "22.3.1", "22.3.2", "22.3.3"],
 }
 
 PENDING_IDS = ["7.6", "9.5"]
