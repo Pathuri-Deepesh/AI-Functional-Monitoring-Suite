@@ -24,6 +24,7 @@ import {
   getFlowStats,
   getFlowStep,
   getFlowWithSteps,
+  getLatestSuccessfulFlowVariables,
   getPrereqRun,
   getProject,
   getUpload,
@@ -507,6 +508,46 @@ app.get("/api/flows/:id/stats", (req, res) => {
   const windowMinutes = Number(req.query.windowMinutes) || 24 * 60;
   res.json(getFlowStats(req.params.id, windowMinutes));
 });
+
+// Phase 1.21 — sample variable snapshot used by the live URL-preview panel
+// in the step editor. Returns the most recent successful run's `variables_json`
+// plus a `iterables` map (`itemVarName → arrayPath`) derived from the flow's
+// own for-each steps so the preview can expand template URLs accurately. Both
+// fields can be empty — the panel handles a missing snapshot gracefully.
+app.get("/api/flows/:id/sample-vars", (req, res) => {
+  const flow = getFlowWithSteps(req.params.id);
+  if (!flow) {
+    res.status(404).json({ error: "Flow not found" });
+    return;
+  }
+  const raw = getLatestSuccessfulFlowVariables(req.params.id) ?? {};
+  // flow_runs.variables_json stores every value as a string (see
+  // flowRunner.flattenVariables) so arrays/objects come back JSON-encoded.
+  // Re-hydrate them here so the preview's Array.isArray() check actually fires
+  // and `{{geo}}`-style iterables expand into per-iteration sample URLs.
+  const variables: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    variables[k] = rehydrateSampleValue(v);
+  }
+  const iterables: Record<string, string> = {};
+  for (const step of flow.steps) {
+    if (step.forEach && step.forEach.itemVarName && step.forEach.arrayVarName) {
+      iterables[step.forEach.itemVarName] = step.forEach.arrayVarName;
+    }
+  }
+  res.json({ variables, iterables, hasSample: Object.keys(variables).length > 0 });
+});
+
+function rehydrateSampleValue(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const s = v.trim();
+  if (!(s.startsWith("[") || s.startsWith("{"))) return v;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return v;
+  }
+}
 
 // ---------- Variable cache (smart caching with TTL) ----------
 app.get("/api/flows/:id/cache", (req, res) => {

@@ -173,6 +173,33 @@ export interface ForEachConfig {
   itemVarName: string;
 }
 
+/**
+ * Phase 1.21 — Compute step. Mirrors backend ComputeTransform / ComputeRow /
+ * ComputeConfig exactly; see backend/src/types.ts for the why.
+ */
+export type ComputeTransform =
+  | { kind: "splitTake"; separator: string; index: number }
+  | { kind: "slice"; start: number; end?: number }
+  | { kind: "lowercase" }
+  | { kind: "uppercase" }
+  | { kind: "trim" }
+  | { kind: "replace"; find: string; replace: string }
+  | { kind: "concat"; template: string }
+  | { kind: "mapAddField"; fieldName: string; sourceField: string; inner: ComputeTransform }
+  | { kind: "concatArrays"; sources: string[] };
+
+export interface ComputeRow {
+  saveAs: string;
+  source: string;
+  transform: ComputeTransform;
+}
+
+export interface ComputeConfig {
+  computations: ComputeRow[];
+}
+
+export type StepType = "http" | "compute" | "loop";
+
 export interface FlowStep {
   id: string;
   flowId: string;
@@ -193,6 +220,17 @@ export interface FlowStep {
   retryBackoffMs: number;
   /** Phase 1.18 — when set, this step iterates over the named array variable. */
   forEach: ForEachConfig | null;
+  /** Phase 1.21 — defaults to "http" when absent (every step pre-1.21). */
+  stepType?: StepType;
+  /** Phase 1.21 — populated only when stepType === "compute". */
+  compute?: ComputeConfig | null;
+}
+
+/** Phase 1.21 — sample-vars endpoint response feeding the URL preview panel. */
+export interface FlowSampleVars {
+  variables: Record<string, unknown>;
+  iterables: Record<string, string>;
+  hasSample: boolean;
 }
 
 export interface Flow {
@@ -322,6 +360,10 @@ export interface PrereqStep {
   waitBeforeMs: number;
   maxRetries: number;
   retryBackoffMs: number;
+  /** Phase 1.21 — defaults to "http" when absent. */
+  stepType?: StepType;
+  /** Phase 1.21 — populated only when stepType === "compute". */
+  compute?: ComputeConfig | null;
 }
 
 export interface PrereqsBundle {

@@ -4,9 +4,11 @@ import type {
   AuditResult,
   BodyType,
   CheckRecord,
+  ComputeConfig,
   Extraction,
   Flow,
   FlowRun,
+  FlowSampleVars,
   FlowWithSteps,
   FlowStep,
   FullSnapshot,
@@ -271,6 +273,8 @@ export async function addFlowStep(
     waitBeforeMs?: number;
     maxRetries?: number;
     retryBackoffMs?: number;
+    stepType?: "http" | "compute" | "loop";
+    compute?: ComputeConfig | null;
   }
 ): Promise<FlowStep> {
   return jsonOrThrow(
@@ -352,6 +356,11 @@ export async function listFlowRuns(id: string, limit = 30): Promise<FlowRun[]> {
   return jsonOrThrow(await fetch(`${BASE}/flows/${id}/runs?limit=${limit}`));
 }
 
+// Phase 1.21 — sample-vars snapshot powering the live URL preview panel.
+export async function fetchFlowSampleVars(flowId: string): Promise<FlowSampleVars> {
+  return jsonOrThrow(await fetch(`${BASE}/flows/${flowId}/sample-vars`));
+}
+
 export async function getCachedVariables(id: string): Promise<Record<string, string>> {
   return jsonOrThrow(await fetch(`${BASE}/flows/${id}/cache`));
 }
@@ -382,6 +391,8 @@ export async function addPrereqStep(
     waitBeforeMs?: number;
     maxRetries?: number;
     retryBackoffMs?: number;
+    stepType?: "http" | "compute" | "loop";
+    compute?: ComputeConfig | null;
   }
 ): Promise<PrereqStep> {
   return jsonOrThrow(

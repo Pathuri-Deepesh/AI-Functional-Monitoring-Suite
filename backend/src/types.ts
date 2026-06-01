@@ -184,6 +184,49 @@ export interface ForEachConfig {
   itemVarName: string;
 }
 
+/**
+ * Phase 1.21 — Compute step.
+ * A non-HTTP step that derives new variables from existing scope.
+ *
+ * Transforms in v1 (covers the Logitech campaign use case + most foreseeable flows):
+ *   - splitTake:    "en-US" split "-" take 0 → "en"
+ *   - slice:        substring
+ *   - lowercase / uppercase / trim
+ *   - replace:      find/replace literal
+ *   - concat:       template-style "{{a}}-{{b}}" → "a-b" (template is self-contained, source ignored)
+ *   - mapAddField:  for an array `source`, return a new array where each element gets an extra
+ *                   field derived from one of its own fields. e.g. enrich each campaign with
+ *                   `.language` derived from its `.locale` via splitTake "-" 0. Lets a single
+ *                   top-level Compute step prepare data for a for-each block without needing
+ *                   a Compute step *inside* each iteration.
+ */
+export type ComputeTransform =
+  | { kind: "splitTake"; separator: string; index: number }
+  | { kind: "slice"; start: number; end?: number }
+  | { kind: "lowercase" }
+  | { kind: "uppercase" }
+  | { kind: "trim" }
+  | { kind: "replace"; find: string; replace: string }
+  | { kind: "concat"; template: string }
+  | { kind: "mapAddField"; fieldName: string; sourceField: string; inner: ComputeTransform }
+  | { kind: "concatArrays"; sources: string[] };
+
+export interface ComputeRow {
+  /** New variable name to write into scope (e.g. `language`, `campaigns_enriched`). */
+  saveAs: string;
+  /** Source variable name with optional dotted path (e.g. `campaign.locale`, `campaigns`).
+   *  Ignored when `transform.kind === "concat"` because the template is self-contained. */
+  source: string;
+  transform: ComputeTransform;
+}
+
+export interface ComputeConfig {
+  /** Executed in order; each row can reference vars written by prior rows in the same step. */
+  computations: ComputeRow[];
+}
+
+export type StepType = "http" | "compute" | "loop";
+
 export interface FlowStep {
   id: string;
   flowId: string;
@@ -211,6 +254,10 @@ export interface FlowStep {
   retryBackoffMs: number;
   /** Phase 1.18 — when set, this step runs once per element of the named array variable. */
   forEach: ForEachConfig | null;
+  /** Phase 1.21 — step kind. Absent/`"http"` = the existing HTTP step (every step pre-1.21). */
+  stepType?: StepType;
+  /** Phase 1.21 — populated only when `stepType === "compute"`. */
+  compute?: ComputeConfig | null;
 }
 
 export interface Flow {
@@ -334,6 +381,10 @@ export interface PrereqStep {
   waitBeforeMs: number;
   maxRetries: number;
   retryBackoffMs: number;
+  /** Phase 1.21 — step kind. Absent/`"http"` = the existing HTTP step (every prereq pre-1.21). */
+  stepType?: StepType;
+  /** Phase 1.21 — populated only when `stepType === "compute"`. */
+  compute?: ComputeConfig | null;
 }
 
 export interface PrereqRun {

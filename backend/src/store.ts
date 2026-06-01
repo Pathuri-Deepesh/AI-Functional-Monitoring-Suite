@@ -6,6 +6,7 @@ import type {
   AssertionResult,
   BodyType,
   CheckRecord,
+  ComputeConfig,
   ExtractedValue,
   Extraction,
   Flow,
@@ -605,6 +606,8 @@ interface FlowStepRow {
   max_retries: number;
   retry_backoff_ms: number;
   for_each_config_json: string | null;
+  step_type: string | null;
+  compute_config_json: string | null;
 }
 
 interface FlowRunRow {
@@ -684,6 +687,10 @@ function rowToFlowStep(r: FlowStepRow): FlowStep {
     maxRetries: r.max_retries,
     retryBackoffMs: r.retry_backoff_ms,
     forEach: r.for_each_config_json ? safeParse<ForEachConfig | null>(r.for_each_config_json, null) : null,
+    stepType: (r.step_type as "http" | "compute" | "loop" | null) ?? "http",
+    compute: r.compute_config_json
+      ? safeParse<ComputeConfig | null>(r.compute_config_json, null)
+      : null,
   };
 }
 
@@ -958,24 +965,46 @@ export function addFlowStep(input: {
   maxRetries?: number;
   retryBackoffMs?: number;
   forEach?: ForEachConfig | null;
+  stepType?: "http" | "compute" | "loop";
+  compute?: ComputeConfig | null;
 }): FlowStep {
   const flow = getFlow(input.flowId);
   if (!flow) throw new Error("Flow not found");
 
-  const url = input.url.trim();
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("Only http(s) URLs are supported");
+  const isCompute = input.stepType === "compute";
+  const isLoop = input.stepType === "loop";
+
+  // URL is required & validated only for HTTP steps. Compute and Loop steps use
+  // sentinel URLs so we can keep the column NOT NULL and reuse the same row shape.
+  let url = "";
+  if (isCompute) {
+    url = "compute://step";
+    if (!input.compute || !Array.isArray(input.compute.computations) || input.compute.computations.length === 0) {
+      throw new Error("Compute step requires at least one computation");
     }
-  } catch {
-    throw new Error("Invalid URL");
-  }
-  if ((input.method as string) === "DELETE") {
-    throw new Error("DELETE method is not allowed for safety");
+  } else if (isLoop) {
+    url = "loop://step";
+    const fe = normalizeForEach(input.forEach);
+    if (!fe || !fe.arrayVarName || !fe.itemVarName) {
+      throw new Error("Loop step requires both 'iterate over' (arrayVarName) and 'as' (itemVarName)");
+    }
+  } else {
+    url = input.url.trim();
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Only http(s) URLs are supported");
+      }
+    } catch {
+      throw new Error("Invalid URL");
+    }
+    if ((input.method as string) === "DELETE") {
+      throw new Error("DELETE method is not allowed for safety");
+    }
   }
 
-  const forEach = normalizeForEach(input.forEach);
+  // Loop and HTTP steps may carry a forEach; Compute never does.
+  const forEach = isCompute ? null : normalizeForEach(input.forEach);
 
   // Next position = current max + 1
   const maxRow = db()
@@ -995,8 +1024,9 @@ export function addFlowStep(input: {
     .prepare(
       `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                api_key_id, assertions_json, custom_headers_json, query_params_json,
-                               extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                               extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json,
+                               step_type, compute_config_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -1004,19 +1034,21 @@ export function addFlowStep(input: {
       nextPos,
       input.description?.trim() ?? "",
       url,
-      input.method ?? "GET",
-      input.bodyType ?? "none",
-      input.body ?? "",
-      input.bodyContentType?.trim() ?? "",
-      input.apiKeyId ?? null,
-      JSON.stringify(input.assertions ?? []),
-      JSON.stringify(cleanKv(input.customHeaders ?? [])),
-      JSON.stringify(cleanKv(input.queryParams ?? [])),
-      JSON.stringify(input.extractions ?? []),
+      isCompute || isLoop ? "GET" : input.method ?? "GET",
+      isCompute || isLoop ? "none" : input.bodyType ?? "none",
+      isCompute || isLoop ? "" : input.body ?? "",
+      isCompute || isLoop ? "" : input.bodyContentType?.trim() ?? "",
+      isCompute || isLoop ? null : input.apiKeyId ?? null,
+      JSON.stringify(isCompute || isLoop ? [] : input.assertions ?? []),
+      JSON.stringify(isCompute || isLoop ? [] : cleanKv(input.customHeaders ?? [])),
+      JSON.stringify(isCompute || isLoop ? [] : cleanKv(input.queryParams ?? [])),
+      JSON.stringify(isCompute || isLoop ? [] : input.extractions ?? []),
       Math.max(0, Math.min(60_000, Number(input.waitBeforeMs ?? 0))),
       Math.max(0, Math.min(5, Number(input.maxRetries ?? 0))),
       Math.max(100, Math.min(30_000, Number(input.retryBackoffMs ?? 1000))),
-      forEach ? JSON.stringify(forEach) : null
+      forEach ? JSON.stringify(forEach) : null,
+      isCompute ? "compute" : isLoop ? "loop" : "http",
+      isCompute ? JSON.stringify(input.compute) : null
     );
   return getFlowStep(id)!;
 }
@@ -1039,6 +1071,7 @@ export function updateFlowStep(
     maxRetries: number;
     retryBackoffMs: number;
     forEach: ForEachConfig | null;
+    compute: ComputeConfig | null;
   }>
 ): FlowStep | undefined {
   const existing = getFlowStep(id);
@@ -1047,19 +1080,37 @@ export function updateFlowStep(
     throw new Error("DELETE method is not allowed for safety");
   }
 
+  const isCompute = (existing.stepType ?? "http") === "compute";
+  const isLoop = (existing.stepType ?? "http") === "loop";
+
   // forEach: if the caller passed the key, use the normalized value (which may be null
   // to clear it). If the key was not in the patch, keep what's already stored.
+  // Compute steps never have a for-each. Loop steps REQUIRE a forEach — must not clear.
   const forEachProvided = Object.prototype.hasOwnProperty.call(patch, "forEach");
-  const nextForEach = forEachProvided
+  const nextForEach = isCompute
+    ? null
+    : forEachProvided
     ? normalizeForEach(patch.forEach)
     : existing.forEach ?? null;
 
+  if (isLoop && (!nextForEach || !nextForEach.arrayVarName || !nextForEach.itemVarName)) {
+    throw new Error("Loop step requires both 'iterate over' (arrayVarName) and 'as' (itemVarName)");
+  }
+
   // Phase 1.19 — validate nesting depth on the proposed post-update step list
-  if (forEachProvided) {
+  if (forEachProvided && !isCompute) {
     const proposed = loadStepsForDepthCheck(existing.flowId);
     const idx = proposed.findIndex((s) => s.id === id);
     if (idx >= 0) proposed[idx] = { ...proposed[idx], forEach: nextForEach };
     assertForEachDepth(proposed);
+  }
+
+  const computeProvided = Object.prototype.hasOwnProperty.call(patch, "compute");
+  const nextCompute = computeProvided ? patch.compute ?? null : existing.compute ?? null;
+  if (isCompute && nextCompute) {
+    if (!Array.isArray(nextCompute.computations) || nextCompute.computations.length === 0) {
+      throw new Error("Compute step requires at least one computation");
+    }
   }
 
   db()
@@ -1068,7 +1119,7 @@ export function updateFlowStep(
        SET description = ?, url = ?, method = ?, body_type = ?, body = ?, body_content_type = ?,
            api_key_id = ?, assertions_json = ?, custom_headers_json = ?, query_params_json = ?,
            extractions_json = ?, wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?,
-           for_each_config_json = ?
+           for_each_config_json = ?, compute_config_json = ?
        WHERE id = ?`
     )
     .run(
@@ -1087,6 +1138,7 @@ export function updateFlowStep(
       Math.max(0, Math.min(5, Number(patch.maxRetries ?? existing.maxRetries))),
       Math.max(100, Math.min(30_000, Number(patch.retryBackoffMs ?? existing.retryBackoffMs))),
       nextForEach ? JSON.stringify(nextForEach) : null,
+      isCompute && nextCompute ? JSON.stringify(nextCompute) : null,
       id
     );
   return getFlowStep(id);
@@ -1129,8 +1181,9 @@ function insertStepCopyAtTop(targetFlowId: string, source: FlowStep): FlowStep {
       .prepare(
         `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                  api_key_id, assertions_json, custom_headers_json, query_params_json,
-                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json,
+                                 step_type, compute_config_json)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         newId,
@@ -1149,7 +1202,9 @@ function insertStepCopyAtTop(targetFlowId: string, source: FlowStep): FlowStep {
         source.waitBeforeMs,
         source.maxRetries,
         source.retryBackoffMs,
-        source.forEach ? JSON.stringify(source.forEach) : null
+        source.forEach ? JSON.stringify(source.forEach) : null,
+        source.stepType ?? "http",
+        source.compute ? JSON.stringify(source.compute) : null
       );
   });
   return getFlowStep(newId)!;
@@ -1203,8 +1258,9 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
       .prepare(
         `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                  api_key_id, assertions_json, custom_headers_json, query_params_json,
-                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                 extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json,
+                                 step_type, compute_config_json)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         newId,
@@ -1223,7 +1279,9 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
         source.waitBeforeMs,
         source.maxRetries,
         source.retryBackoffMs,
-        source.forEach ? JSON.stringify(source.forEach) : null
+        source.forEach ? JSON.stringify(source.forEach) : null,
+        source.stepType ?? "http",
+        source.compute ? JSON.stringify(source.compute) : null
       );
     // Delete source + rebalance source flow so positions stay contiguous
     db().prepare("DELETE FROM flow_steps WHERE id = ?").run(stepId);
@@ -1345,6 +1403,24 @@ export function getFlowRun(id: string): FlowRun | undefined {
   return rowToFlowRun(row, stepRows.map(rowToStepResult));
 }
 
+/**
+ * Phase 1.21 — used by the URL-preview panel.
+ * Returns the most recent successful run's variable snapshot, or `null` if the
+ * flow has never had a successful run. We pull only `variables_json` (no step
+ * results) because the preview only needs the final-scope variable map.
+ */
+export function getLatestSuccessfulFlowVariables(
+  flowId: string
+): Record<string, unknown> | null {
+  const row = db()
+    .prepare(
+      "SELECT variables_json FROM flow_runs WHERE flow_id = ? AND ok = 1 ORDER BY started_at DESC LIMIT 1"
+    )
+    .get(flowId) as { variables_json: string } | undefined;
+  if (!row) return null;
+  return safeParse<Record<string, unknown>>(row.variables_json, {});
+}
+
 export function listFlowRuns(flowId: string, limit = 30): FlowRun[] {
   const rows = db()
     .prepare("SELECT * FROM flow_runs WHERE flow_id = ? ORDER BY started_at DESC LIMIT ?")
@@ -1434,6 +1510,8 @@ interface PrereqStepRow {
   wait_before_ms: number;
   max_retries: number;
   retry_backoff_ms: number;
+  step_type: string | null;
+  compute_config_json: string | null;
 }
 
 interface PrereqRunRow {
@@ -1490,6 +1568,10 @@ function rowToPrereqStep(r: PrereqStepRow): PrereqStep {
     waitBeforeMs: r.wait_before_ms,
     maxRetries: r.max_retries,
     retryBackoffMs: r.retry_backoff_ms,
+    stepType: (r.step_type as "http" | "compute" | "loop" | null) ?? "http",
+    compute: r.compute_config_json
+      ? safeParse<ComputeConfig | null>(r.compute_config_json, null)
+      : null,
   };
 }
 
@@ -1572,21 +1654,33 @@ export function addPrereqStep(input: {
   waitBeforeMs?: number;
   maxRetries?: number;
   retryBackoffMs?: number;
+  stepType?: "http" | "compute";
+  compute?: ComputeConfig | null;
 }): PrereqStep {
   const project = getProject(input.projectId);
   if (!project) throw new Error("Project not found");
 
-  const url = input.url.trim();
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      throw new Error("Only http(s) URLs are supported");
+  const isCompute = input.stepType === "compute";
+
+  let url = "";
+  if (!isCompute) {
+    url = input.url.trim();
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Only http(s) URLs are supported");
+      }
+    } catch {
+      throw new Error("Invalid URL");
     }
-  } catch {
-    throw new Error("Invalid URL");
-  }
-  if ((input.method as string) === "DELETE") {
-    throw new Error("DELETE method is not allowed for safety");
+    if ((input.method as string) === "DELETE") {
+      throw new Error("DELETE method is not allowed for safety");
+    }
+  } else {
+    url = "compute://step";
+    if (!input.compute || !Array.isArray(input.compute.computations) || input.compute.computations.length === 0) {
+      throw new Error("Compute step requires at least one computation");
+    }
   }
 
   const maxRow = db()
@@ -1599,8 +1693,9 @@ export function addPrereqStep(input: {
     .prepare(
       `INSERT INTO prereq_steps (id, project_id, position, description, url, method, body_type, body,
                                  body_content_type, api_key_id, assertions_json, custom_headers_json,
-                                 query_params_json, extractions_json, wait_before_ms, max_retries, retry_backoff_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                 query_params_json, extractions_json, wait_before_ms, max_retries, retry_backoff_ms,
+                                 step_type, compute_config_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -1608,18 +1703,20 @@ export function addPrereqStep(input: {
       nextPos,
       input.description?.trim() ?? "",
       url,
-      input.method ?? "GET",
-      input.bodyType ?? "none",
-      input.body ?? "",
-      input.bodyContentType?.trim() ?? "",
-      input.apiKeyId ?? null,
-      JSON.stringify(input.assertions ?? []),
-      JSON.stringify(cleanKv(input.customHeaders ?? [])),
-      JSON.stringify(cleanKv(input.queryParams ?? [])),
-      JSON.stringify(input.extractions ?? []),
+      isCompute ? "GET" : input.method ?? "GET",
+      isCompute ? "none" : input.bodyType ?? "none",
+      isCompute ? "" : input.body ?? "",
+      isCompute ? "" : input.bodyContentType?.trim() ?? "",
+      isCompute ? null : input.apiKeyId ?? null,
+      JSON.stringify(isCompute ? [] : input.assertions ?? []),
+      JSON.stringify(isCompute ? [] : cleanKv(input.customHeaders ?? [])),
+      JSON.stringify(isCompute ? [] : cleanKv(input.queryParams ?? [])),
+      JSON.stringify(isCompute ? [] : input.extractions ?? []),
       Math.max(0, Math.min(60_000, Number(input.waitBeforeMs ?? 0))),
       Math.max(0, Math.min(5, Number(input.maxRetries ?? 0))),
-      Math.max(100, Math.min(30_000, Number(input.retryBackoffMs ?? 1000)))
+      Math.max(100, Math.min(30_000, Number(input.retryBackoffMs ?? 1000))),
+      isCompute ? "compute" : "http",
+      isCompute ? JSON.stringify(input.compute) : null
     );
   return getPrereqStep(id)!;
 }
@@ -1641,6 +1738,7 @@ export function updatePrereqStep(
     waitBeforeMs: number;
     maxRetries: number;
     retryBackoffMs: number;
+    compute: ComputeConfig | null;
   }>
 ): PrereqStep | undefined {
   const existing = getPrereqStep(id);
@@ -1648,12 +1746,21 @@ export function updatePrereqStep(
   if ((patch.method as string) === "DELETE") {
     throw new Error("DELETE method is not allowed for safety");
   }
+  const isCompute = (existing.stepType ?? "http") === "compute";
+  const computeProvided = Object.prototype.hasOwnProperty.call(patch, "compute");
+  const nextCompute = computeProvided ? patch.compute ?? null : existing.compute ?? null;
+  if (isCompute && nextCompute) {
+    if (!Array.isArray(nextCompute.computations) || nextCompute.computations.length === 0) {
+      throw new Error("Compute step requires at least one computation");
+    }
+  }
   db()
     .prepare(
       `UPDATE prereq_steps
        SET description = ?, url = ?, method = ?, body_type = ?, body = ?, body_content_type = ?,
            api_key_id = ?, assertions_json = ?, custom_headers_json = ?, query_params_json = ?,
-           extractions_json = ?, wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?
+           extractions_json = ?, wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?,
+           compute_config_json = ?
        WHERE id = ?`
     )
     .run(
@@ -1671,6 +1778,7 @@ export function updatePrereqStep(
       Math.max(0, Math.min(60_000, Number(patch.waitBeforeMs ?? existing.waitBeforeMs))),
       Math.max(0, Math.min(5, Number(patch.maxRetries ?? existing.maxRetries))),
       Math.max(100, Math.min(30_000, Number(patch.retryBackoffMs ?? existing.retryBackoffMs))),
+      isCompute && nextCompute ? JSON.stringify(nextCompute) : null,
       id
     );
   return getPrereqStep(id);

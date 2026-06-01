@@ -1,4 +1,4 @@
-import type { ExtractedValue, Extraction } from "./types.js";
+import type { ComputeTransform, ExtractedValue, Extraction } from "./types.js";
 
 /**
  * Extract values from an HTTP response according to the configured extractions.
@@ -205,4 +205,229 @@ function toScalar(v: unknown): string {
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
   return JSON.stringify(v);
+}
+
+// =============================================================
+// Phase 1.21 — Compute step transforms
+// =============================================================
+
+/**
+ * Apply a single transform to a value, with access to the current scope stack
+ * so `concat` and `mapAddField`'s template interpolation can reach prior vars.
+ *
+ * Throws on programmer error (unknown transform kind, mapAddField on non-array).
+ * Returns the literal string `""` for null/undefined inputs so downstream code
+ * never has to special-case missing fields.
+ */
+export function applyComputeTransform(
+  value: unknown,
+  transform: ComputeTransform,
+  stack: ScopeStack
+): unknown {
+  switch (transform.kind) {
+    case "splitTake": {
+      const s = value == null ? "" : String(value);
+      const parts = s.split(transform.separator);
+      const idx = transform.index >= 0 ? transform.index : parts.length + transform.index;
+      return parts[idx] ?? "";
+    }
+    case "slice": {
+      const s = value == null ? "" : String(value);
+      return s.slice(transform.start, transform.end);
+    }
+    case "lowercase":
+      return value == null ? "" : String(value).toLowerCase();
+    case "uppercase":
+      return value == null ? "" : String(value).toUpperCase();
+    case "trim":
+      return value == null ? "" : String(value).trim();
+    case "replace": {
+      const s = value == null ? "" : String(value);
+      // Literal replace (not regex). `replaceAll` honors a string `find` as a literal.
+      return s.split(transform.find).join(transform.replace);
+    }
+    case "concat": {
+      // `source` is ignored; template is self-contained and walks the scope stack.
+      return substitute(transform.template, stack);
+    }
+    case "mapAddField": {
+      if (!Array.isArray(value)) {
+        throw new Error(
+          `Compute mapAddField expected an array source, got ${typeof value}`
+        );
+      }
+      return value.map((el) => {
+        const sourceVal =
+          el && typeof el === "object" && transform.sourceField in (el as Record<string, unknown>)
+            ? (el as Record<string, unknown>)[transform.sourceField]
+            : "";
+        // Push the element onto the scope stack so inner transforms (notably
+        // concatArrays) can resolve per-element fields by name — e.g. an element
+        // `{countries:[...], regions:[...]}` makes `concatArrays(["countries","regions"])`
+        // see those arrays as if they were top-level vars.
+        const innerStack: ScopeStack =
+          el && typeof el === "object" ? [...stack, el as Scope] : stack;
+        const newVal = applyComputeTransform(sourceVal, transform.inner, innerStack);
+        return { ...(el as Record<string, unknown>), [transform.fieldName]: newVal };
+      });
+    }
+    case "concatArrays": {
+      // `source` (value) is ignored; we resolve each named variable from the scope
+      // stack ourselves so the user can combine N arrays in one row.
+      // Missing variables are skipped (matches `concat`'s lenient template behavior).
+      // Type mismatches throw — that's a real configuration error worth surfacing.
+      const out: unknown[] = [];
+      for (const rawName of transform.sources) {
+        const name = (rawName ?? "").trim();
+        if (!name) continue;
+        const v = resolveVar(stack, name);
+        if (v == null) continue;
+        if (!Array.isArray(v)) {
+          throw new Error(
+            `Compute concatArrays expected '${name}' to be an array, got ${typeof v}`
+          );
+        }
+        out.push(...v);
+      }
+      return out;
+    }
+    default: {
+      const _exhaustive: never = transform;
+      throw new Error(`Unknown compute transform: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+}
+
+// =============================================================
+// Phase 1.21 — Live URL preview helpers
+// =============================================================
+
+export type PreviewSegment = {
+  text: string;
+  kind: "literal" | "resolved" | "unresolved";
+};
+
+export type PreviewRow = {
+  url: string;
+  segments: PreviewSegment[];
+};
+
+export type PreviewResult = {
+  rows: PreviewRow[];
+  /** Estimated total calls per run (e.g. 44 campaigns × ~1.5 countries each ≈ 69). */
+  estimatedTotal: number;
+  /** Number of rows sampled vs. estimatedTotal (rows.length when smaller, capped otherwise). */
+  sampledCount: number;
+  /** True if any segment in any row could not be resolved (typo / missing var). */
+  hasUnresolved: boolean;
+};
+
+/**
+ * Expand a URL template against a sample variable snapshot, materializing up to
+ * `maxSamples` representative rows. When the template references a for-each
+ * `itemVarName`, the helper looks up the corresponding array via `iterables`
+ * (`itemVarName → arrayPath`) and walks a deterministic prefix of it so the
+ * preview is stable across opens.
+ *
+ * Each segment is tagged so the UI can color-code:
+ *   - `literal`     → text outside any `{{...}}`
+ *   - `resolved`    → `{{var}}` that produced a non-empty value
+ *   - `unresolved`  → `{{var}}` that walked off the sample data
+ */
+export function expandTemplateForPreview(args: {
+  template: string;
+  sampleVars: Scope;
+  /** Map of for-each `itemVarName` → dotted path that resolves to its array in `sampleVars`. */
+  iterables: Record<string, string>;
+  maxSamples?: number;
+}): PreviewResult {
+  const { template, sampleVars, iterables, maxSamples = 20 } = args;
+
+  // Identify which iterable item-names actually appear in the template (as `{{itemName...}}`).
+  const itemNames = Object.keys(iterables);
+  const usedItems = itemNames.filter((name) =>
+    new RegExp(`\\{\\{\\s*${escapeRegex(name)}(\\.|\\s|\\}\\})`).test(template)
+  );
+
+  // Materialize each used iterable's source array (or [undefined] if not in sample yet).
+  const sourceArrays: Array<{ name: string; items: unknown[] }> = usedItems.map((name) => {
+    const path = iterables[name];
+    const arr = resolveVar([sampleVars], path);
+    return {
+      name,
+      items: Array.isArray(arr) ? arr : [undefined],
+    };
+  });
+
+  // Cartesian-product the iterables, then walk the first `maxSamples` combos.
+  const totalCombos = sourceArrays.reduce(
+    (acc, src) => acc * Math.max(1, src.items.length),
+    1
+  );
+  const cap = Math.min(totalCombos, maxSamples);
+
+  const rows: PreviewRow[] = [];
+  let hasUnresolved = false;
+  for (let i = 0; i < cap; i++) {
+    const iterScope: Scope = {};
+    let remainder = i;
+    for (const src of sourceArrays) {
+      const len = Math.max(1, src.items.length);
+      const idx = remainder % len;
+      remainder = Math.floor(remainder / len);
+      iterScope[src.name] = src.items[idx];
+    }
+    const row = buildPreviewRow(template, [sampleVars, iterScope]);
+    if (row.segments.some((s) => s.kind === "unresolved")) hasUnresolved = true;
+    rows.push(row);
+  }
+
+  // If template has no `{{var}}` at all, surface a single literal row so the
+  // caller can choose to suppress the panel entirely.
+  if (rows.length === 0 && template) {
+    rows.push({ url: template, segments: [{ text: template, kind: "literal" }] });
+  }
+
+  return {
+    rows,
+    estimatedTotal: totalCombos,
+    sampledCount: rows.length,
+    hasUnresolved,
+  };
+}
+
+function buildPreviewRow(template: string, stack: ScopeStack): PreviewRow {
+  const segments: PreviewSegment[] = [];
+  const re = /\{\{\s*([a-zA-Z_][\w.-]*)\s*\}\}/g;
+  let cursor = 0;
+  let urlOut = "";
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(template)) !== null) {
+    if (match.index > cursor) {
+      const literal = template.slice(cursor, match.index);
+      segments.push({ text: literal, kind: "literal" });
+      urlOut += literal;
+    }
+    const name = match[1];
+    const resolved = resolveVar(stack, name);
+    if (resolved == null || resolved === "") {
+      segments.push({ text: `{{${name}}}`, kind: "unresolved" });
+      urlOut += `{{${name}}}`;
+    } else {
+      const text = toScalar(resolved);
+      segments.push({ text, kind: "resolved" });
+      urlOut += text;
+    }
+    cursor = re.lastIndex;
+  }
+  if (cursor < template.length) {
+    const tail = template.slice(cursor);
+    segments.push({ text: tail, kind: "literal" });
+    urlOut += tail;
+  }
+  return { url: urlOut, segments };
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

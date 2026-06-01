@@ -1,6 +1,11 @@
 import { reasonForError, reasonForStatus } from "./errorReason.js";
 import { evaluateAssertions } from "./assertions.js";
-import { extractFromResponse, resolveVar, substitute } from "./extraction.js";
+import {
+  applyComputeTransform,
+  extractFromResponse,
+  resolveVar,
+  substitute,
+} from "./extraction.js";
 import type { Scope, ScopeStack } from "./extraction.js";
 import {
   cacheVariable,
@@ -478,12 +483,19 @@ async function runForEachBlock(
       return;
     }
 
+    // Phase 1.22 — Loop step: pure scope provider. Iterates `total` times to
+    // push iteration scopes for child steps, but makes NO HTTP call of its own
+    // and records NO per-iteration StepResult (would just be noise on the dashboard).
+    // A single summary StepResult is emitted after the iteration loop completes.
+    const isLoopStep = (step.stepType ?? "http") === "loop";
+
     for (let idx = 0; idx < total; idx++) {
       // Push this iteration's scope.
       pushScope({ [fe.itemVarName]: capped[idx] }, idx, total);
 
-      // Truncation guard — applies to every individual HTTP call.
-      if (runState.totalCalls >= TOTAL_CALL_CAP) {
+      // Truncation guard — applies to every individual HTTP call. Loop steps
+      // make no calls, so they don't consume budget.
+      if (!isLoopStep && runState.totalCalls >= TOTAL_CALL_CAP) {
         recordStepResult({
           flowRunId: runId,
           stepId: step.id,
@@ -510,46 +522,48 @@ async function runForEachBlock(
         return;
       }
 
-      const stack = currentStack();
-      const resolved = substituteStep(step, stack);
+      if (!isLoopStep) {
+        const stack = currentStack();
+        const resolved = substituteStep(step, stack);
 
-      const path = currentPath();
-      const pathCount = currentPathCount();
+        const path = currentPath();
+        const pathCount = currentPathCount();
 
-      runState.totalCalls++;
-      const outcome = await executeStep(resolved, stack, runId, {
-        forEachIteration: blockIndices.length === 1 ? idx + 1 : null,
-        forEachTotal: blockIndices.length === 1 ? total : null,
-        forEachPath: path.length > 0 ? path.map((n) => n + 1) : null,
-        forEachTotalPath: pathCount.length > 0 ? pathCount : null,
-      });
+        runState.totalCalls++;
+        const outcome = await executeStep(resolved, stack, runId, {
+          forEachIteration: blockIndices.length === 1 ? idx + 1 : null,
+          forEachTotal: blockIndices.length === 1 ? total : null,
+          forEachPath: path.length > 0 ? path.map((n) => n + 1) : null,
+          forEachTotalPath: pathCount.length > 0 ? pathCount : null,
+        });
 
-      recordStepResult({
-        flowRunId: runId,
-        stepId: step.id,
-        position: step.position,
-        statusCode: outcome.statusCode,
-        statusGroup: outcome.statusGroup,
-        errorReason: outcome.errorReason,
-        timings: outcome.timings,
-        assertionResults: outcome.assertionResults,
-        extractedValues: outcome.extractedValues,
-        attempts: outcome.attempts,
-        skipped: false,
-        skipReason: null,
-        ok: outcome.ok,
-        // Back-compat: depth-1 rows keep iteration_index/_count populated.
-        iterationIndex: blockIndices.length === 1 ? idx : null,
-        iterationCount: blockIndices.length === 1 ? total : null,
-        iterationPath: blockIndices.length > 1 ? path : null,
-        iterationPathCount: blockIndices.length > 1 ? pathCount : null,
-        resolvedUrl: resolved.url,
-      });
+        recordStepResult({
+          flowRunId: runId,
+          stepId: step.id,
+          position: step.position,
+          statusCode: outcome.statusCode,
+          statusGroup: outcome.statusGroup,
+          errorReason: outcome.errorReason,
+          timings: outcome.timings,
+          assertionResults: outcome.assertionResults,
+          extractedValues: outcome.extractedValues,
+          attempts: outcome.attempts,
+          skipped: false,
+          skipReason: null,
+          ok: outcome.ok,
+          // Back-compat: depth-1 rows keep iteration_index/_count populated.
+          iterationIndex: blockIndices.length === 1 ? idx : null,
+          iterationCount: blockIndices.length === 1 ? total : null,
+          iterationPath: blockIndices.length > 1 ? path : null,
+          iterationPathCount: blockIndices.length > 1 ? pathCount : null,
+          resolvedUrl: resolved.url,
+        });
 
-      if (!outcome.ok) {
-        runState.allOk = false;
-        if (!runState.failedAtStepId) runState.failedAtStepId = step.id;
-        // Per locked design: iteration failures do NOT halt the run.
+        if (!outcome.ok) {
+          runState.allOk = false;
+          if (!runState.failedAtStepId) runState.failedAtStepId = step.id;
+          // Per locked design: iteration failures do NOT halt the run.
+        }
       }
 
       // Recurse into the direct child (if any) for this iteration.
@@ -558,6 +572,31 @@ async function runForEachBlock(
       }
 
       popScope();
+    }
+
+    // Phase 1.22 — Loop step summary: emit ONE StepResult per loop step after
+    // its iteration loop completes. Shows up on the dashboard as a single
+    // "🔁 LOOP — N iterations" chip (vs N noisy chips for the HTTP path).
+    if (isLoopStep) {
+      recordStepResult({
+        flowRunId: runId,
+        stepId: step.id,
+        position: step.position,
+        statusCode: null,
+        statusGroup: null,
+        errorReason: null,
+        timings: emptyTimings(),
+        assertionResults: [],
+        extractedValues: [],
+        attempts: 1,
+        skipped: false,
+        skipReason: null,
+        ok: true, // The loop itself can't fail; child step failures surface on their own rows.
+        iterationIndex: null,
+        iterationCount: total,
+        iterationPath: null,
+        iterationPathCount: null,
+      });
     }
   };
 
@@ -617,6 +656,43 @@ async function executeRun(
         skipReason: "Upstream step failed and Stop-on-failure is ON",
         ok: false,
       });
+      i++;
+      continue;
+    }
+
+    // Phase 1.21 — Compute step: pure variable transform, no HTTP.
+    // Writes derived vars into scope; records a single skipped=false StepResult
+    // that surfaces the computed values via `extractedValues` so they show up in
+    // run history the same way as JSONPath extractions.
+    if ((step.stepType ?? "http") === "compute") {
+      const outcome = runComputeStep(step, variables);
+      for (const ev of outcome.extractedValues) {
+        variables[ev.saveAs] = ev.value;
+      }
+      recordStepResult({
+        flowRunId: runId,
+        stepId: step.id,
+        position: step.position,
+        statusCode: null,
+        statusGroup: null,
+        errorReason: outcome.errorReason,
+        timings: emptyTimings(),
+        assertionResults: [],
+        extractedValues: outcome.extractedValues.map((ev) => ({
+          saveAs: ev.saveAs,
+          value: computedValueToPersist(ev.value),
+          fromCache: false,
+        })),
+        attempts: 1,
+        skipped: false,
+        skipReason: null,
+        ok: outcome.ok,
+      });
+      if (!outcome.ok) {
+        runState.allOk = false;
+        if (!runState.failedAtStepId) runState.failedAtStepId = step.id;
+        if (flow.stopOnFailure) runState.upstreamFailed = true;
+      }
       i++;
       continue;
     }
@@ -794,4 +870,64 @@ function emptyTimings(): Timings {
     downloadMs: null,
     totalMs: null,
   };
+}
+
+/**
+ * Phase 1.21 — Compute step runtime.
+ * Pure function: walks the configured computations in order, writes each result
+ * into a local scope that subsequent rows can read from, and returns the new
+ * vars as `ExtractedValue[]` so the caller can both merge them into the run
+ * scope and record them in the step history.
+ *
+ * Errors in a single transform (e.g. mapAddField on a non-array) mark the
+ * whole compute step failed but don't crash the runner — the failed row simply
+ * doesn't get written, and `errorReason` carries the message.
+ */
+/** ExtractedValue.value is `string | unknown[]`. Coerce arbitrary compute outputs
+ *  into that shape: arrays pass through (so for-each can iterate them), scalars
+ *  stringify, objects JSON-stringify. */
+function computedValueToPersist(v: unknown): string | unknown[] {
+  if (Array.isArray(v)) return v;
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function runComputeStep(
+  step: FlowStep,
+  variables: Record<string, unknown>
+): {
+  ok: boolean;
+  errorReason: string | null;
+  extractedValues: Array<{ saveAs: string; value: unknown; fromCache: boolean }>;
+} {
+  const cfg = step.compute;
+  if (!cfg || !Array.isArray(cfg.computations) || cfg.computations.length === 0) {
+    return { ok: false, errorReason: "Compute step has no computations", extractedValues: [] };
+  }
+  const out: Array<{ saveAs: string; value: unknown; fromCache: boolean }> = [];
+  // Local scope so rows can reference vars written by prior rows in the same step.
+  const localScope: Scope = { ...variables };
+  for (const row of cfg.computations) {
+    if (!row.saveAs || !row.saveAs.trim()) continue;
+    try {
+      const sourceVal =
+        row.transform.kind === "concat" ? "" : resolveVar([localScope], row.source);
+      const newVal = applyComputeTransform(sourceVal, row.transform, [localScope]);
+      localScope[row.saveAs] = newVal;
+      out.push({ saveAs: row.saveAs, value: newVal, fromCache: false });
+    } catch (err: any) {
+      return {
+        ok: false,
+        errorReason: `Compute "${row.saveAs}" failed: ${err?.message ?? String(err)}`,
+        extractedValues: out,
+      };
+    }
+  }
+  return { ok: true, errorReason: null, extractedValues: out };
 }

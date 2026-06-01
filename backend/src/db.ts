@@ -311,6 +311,14 @@ function initSchema(d: DatabaseSync): void {
   // skipped rows and for pre-1.19.1 rows.
   ensureColumn(d, "step_results", "resolved_url", "resolved_url TEXT");
   ensureColumn(d, "prereq_step_results", "resolved_url", "resolved_url TEXT");
+
+  // Phase 1.21 — Compute step. `step_type` defaults to 'http' so every existing
+  // row continues to behave as an HTTP step. `compute_config_json` is NULL for
+  // HTTP steps and populated for Compute steps.
+  ensureColumn(d, "flow_steps", "step_type", "step_type TEXT NOT NULL DEFAULT 'http'");
+  ensureColumn(d, "flow_steps", "compute_config_json", "compute_config_json TEXT");
+  ensureColumn(d, "prereq_steps", "step_type", "step_type TEXT NOT NULL DEFAULT 'http'");
+  ensureColumn(d, "prereq_steps", "compute_config_json", "compute_config_json TEXT");
 }
 
 function migrateFromJsonIfNeeded(d: DatabaseSync): void {

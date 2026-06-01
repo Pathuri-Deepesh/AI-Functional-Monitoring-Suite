@@ -39,6 +39,7 @@ import type {
   LiveStepProgress,
   StatusGroup,
   StepResult,
+  StepType,
 } from "../types";
 import { checkStepVarRefs } from "../utils/varRefs";
 import { MoveCopyStepModal } from "./MoveCopyStepModal";
@@ -603,7 +604,6 @@ function SortedStepList(props: {
               : [];
             const isRunningStep =
               running && runningStepPosition === step.position;
-            const isQueued = running && !result && !isRunningStep;
             const earlier = arr.slice(0, idx);
             const brokenVarRefs = checkStepVarRefs(
               step,
@@ -611,6 +611,33 @@ function SortedStepList(props: {
               projectVarNames
             );
             const forEachDepth = computeForEachDepth(step, earlier);
+            // Phase 1.22 — a Loop step's scope is "active" when the live step
+            // sits inside it. Without this, the Loop sits on "QUEUED" the whole
+            // time it's actually orchestrating N iterations (the live signal
+            // points at the inner HTTP step, not the Loop). We derive the
+            // current iteration directly from liveStep.forEachPath[depth-1].
+            const loopLiveProgress: { current: number; total: number } | null = (() => {
+              if ((step.stepType ?? "http") !== "loop") return null;
+              if (!step.forEach || forEachDepth < 1) return null;
+              if (!live || !running) return null;
+              if (live.position <= step.position) return null;
+              const path = live.forEachPath;
+              const totals = live.forEachTotalPath;
+              if (!path || !totals || path.length < forEachDepth) return null;
+              const current = path[forEachDepth - 1];
+              const total = totals[forEachDepth - 1];
+              if (!current || !total) return null;
+              return { current, total };
+            })();
+            const isLoopActive = loopLiveProgress != null;
+            const isQueued = running && !result && !isRunningStep && !isLoopActive;
+            const runStateFinal: "idle" | "running" | "queued" = isLoopActive
+              ? "running"
+              : isRunningStep
+              ? "running"
+              : isQueued
+              ? "queued"
+              : "idle";
             return (
               <StepRow
                 key={step.id}
@@ -619,6 +646,7 @@ function SortedStepList(props: {
                 method={step.method}
                 url={step.url}
                 description={step.description}
+                stepType={step.stepType ?? "http"}
                 extractions={step.extractions
                   .map((e) => e.saveAs)
                   .filter(Boolean)}
@@ -626,10 +654,9 @@ function SortedStepList(props: {
                 forEachDepth={forEachDepth}
                 iterationResults={iterationResults}
                 result={result}
-                runState={
-                  isRunningStep ? "running" : isQueued ? "queued" : "idle"
-                }
+                runState={runStateFinal}
                 liveAttempt={isRunningStep ? live : null}
+                loopLiveProgress={loopLiveProgress}
                 brokenVarRefs={brokenVarRefs}
                 dragDisabled={running}
                 onMoveToFlow={() => onMoveStep(step)}
@@ -661,6 +688,8 @@ function StepRow(props: {
   method: string;
   url: string;
   description: string;
+  /** Phase 1.21 — defaults to "http". "compute" hides URL/method, "loop" replaces method with LOOP badge. */
+  stepType: StepType;
   extractions: string[];
   forEach: ForEachConfig | null;
   /** Phase 1.19 — 1..4 when this step is a for-each; 0 otherwise. Drives pill color + tree depth. */
@@ -669,6 +698,12 @@ function StepRow(props: {
   result: StepResult | null;
   runState?: "idle" | "running" | "queued";
   liveAttempt?: LiveStepProgress | null;
+  /**
+   * Phase 1.22 — set on Loop steps while their scope is active. Drives the
+   * "▶ ITER X / N" pill and the inline progress bar so the user can see the
+   * loop is actually orchestrating work instead of sitting on QUEUED.
+   */
+  loopLiveProgress?: { current: number; total: number } | null;
   brokenVarRefs: string[];
   dragDisabled: boolean;
   onMoveToFlow: () => void;
@@ -682,6 +717,7 @@ function StepRow(props: {
     method,
     url,
     description,
+    stepType,
     extractions,
     forEach,
     forEachDepth,
@@ -689,6 +725,7 @@ function StepRow(props: {
     result,
     runState = "idle",
     liveAttempt,
+    loopLiveProgress,
     brokenVarRefs,
     dragDisabled,
     onMoveToFlow,
@@ -696,6 +733,11 @@ function StepRow(props: {
     disableActions,
     onClick,
   } = props;
+  const isLoopStep = stepType === "loop";
+  const isComputeStep = stepType === "compute";
+  const loopProgressPct = loopLiveProgress
+    ? Math.min(100, Math.round((loopLiveProgress.current / loopLiveProgress.total) * 100))
+    : 0;
   // dnd-kit sortable hook — drives the smooth slide-out-of-the-way animation
   // when another row is dragged across this one, and exposes the listeners
   // that the grip handle binds to so click-to-edit on the rest of the row
@@ -750,7 +792,9 @@ function StepRow(props: {
       : "g-5xx";
   const pillText =
     runState === "running"
-      ? isRetry && liveAttempt
+      ? loopLiveProgress
+        ? `▶ ITER ${loopLiveProgress.current} / ${loopLiveProgress.total}`
+        : isRetry && liveAttempt
         ? `🔁 RETRY ${liveAttempt.attempt - 1}/${liveAttempt.maxAttempts - 1}`
         : "▶ RUNNING"
       : runState === "queued"
@@ -794,7 +838,17 @@ function StepRow(props: {
       <div className="step-main">
         <div className="step-line">
           <span className={`pill ${statusClass}`}>{pillText}</span>
-          <span className={`method-tag ${METHOD_COLOR[method] ?? "method-get"}`}>{method}</span>
+          {isLoopStep ? (
+            <span className="step-type-badge --loop" title="Loop step — iterates without an HTTP call">
+              🔁 LOOP
+            </span>
+          ) : isComputeStep ? (
+            <span className="step-type-badge --compute" title="Compute step — derives variables, no HTTP call">
+              ⚙ COMPUTE
+            </span>
+          ) : (
+            <span className={`method-tag ${METHOD_COLOR[method] ?? "method-get"}`}>{method}</span>
+          )}
           {forEach && (
             <span
               className={`step-foreach-pill depth-${Math.max(1, forEachDepth)}`}
@@ -807,11 +861,26 @@ function StepRow(props: {
               ⟳ {forEachDepth > 1 ? `L${forEachDepth} ` : ""}for each {`{{${forEach.itemVarName}}}`}
             </span>
           )}
-          <span className="url-link" style={{ borderBottom: "none", color: "var(--text)" }}>
-            {url}
-          </span>
+          {!isLoopStep && !isComputeStep && (
+            <span className="url-link" style={{ borderBottom: "none", color: "var(--text)" }}>
+              {url}
+            </span>
+          )}
         </div>
         {description && <div className="step-desc muted small">{description}</div>}
+        {loopLiveProgress && (
+          <div className="loop-progress" aria-label={`Loop iteration ${loopLiveProgress.current} of ${loopLiveProgress.total}`}>
+            <div className="loop-progress-row">
+              <span className="loop-progress-label">
+                🔁 iteration <strong>{loopLiveProgress.current}</strong> of {loopLiveProgress.total}
+              </span>
+              <span className="loop-progress-pct muted small">{loopProgressPct}%</span>
+            </div>
+            <div className="loop-progress-bar">
+              <div className="loop-progress-bar-fill" style={{ width: `${loopProgressPct}%` }} />
+            </div>
+          </div>
+        )}
         {brokenVarRefs.length > 0 && (
           <div className="step-result-meta">
             <span
@@ -836,7 +905,15 @@ function StepRow(props: {
         )}
         {result && !iterating && (
           <div className="step-result-meta">
-            {result.timings.totalMs != null && (
+            {isLoopStep && result.iterationCount != null && (
+              <span
+                className="meta-chip success"
+                title="Loop step opened a scope — child steps ran once per iteration"
+              >
+                🔁 ran {result.iterationCount} iteration{result.iterationCount === 1 ? "" : "s"}
+              </span>
+            )}
+            {!isLoopStep && result.timings.totalMs != null && (
               <span className="meta-chip">⏱ {result.timings.totalMs}ms</span>
             )}
             {result.attempts > 1 && (
@@ -911,6 +988,7 @@ function StepRow(props: {
                   {r.timings.totalMs != null && (
                     <span className="iter-latency muted small">{r.timings.totalMs}ms</span>
                   )}
+                  {r.resolvedUrl && <CopyableUrl url={r.resolvedUrl} />}
                   {r.errorReason && (
                     <span className="iter-reason" title={r.errorReason}>
                       {r.errorReason.slice(0, 80)}

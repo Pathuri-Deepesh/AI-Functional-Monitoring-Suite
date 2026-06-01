@@ -1,6 +1,12 @@
 import { reasonForError, reasonForStatus } from "./errorReason.js";
 import { evaluateAssertions } from "./assertions.js";
-import { extractFromResponse, substitute } from "./extraction.js";
+import {
+  applyComputeTransform,
+  extractFromResponse,
+  resolveVar,
+  substitute,
+} from "./extraction.js";
+import type { Scope } from "./extraction.js";
 import {
   cacheProjectVariable,
   finishPrereqRun,
@@ -251,6 +257,50 @@ async function executeRun(
       continue;
     }
 
+    // Phase 1.21 — Compute prereq step: derive a header value from an env var,
+    // shape a token before a downstream call, etc. No HTTP fired.
+    if ((step.stepType ?? "http") === "compute") {
+      const outcome = runComputePrereqStep(step, variables);
+      for (const ev of outcome.extractedValues) {
+        // Prereq scope is string-typed; arrays/objects from compute serialize.
+        const v = ev.value;
+        variables[ev.saveAs] =
+          typeof v === "string" ? v : Array.isArray(v) || (v && typeof v === "object") ? JSON.stringify(v) : String(v ?? "");
+      }
+      recordPrereqStepResult({
+        prereqRunId: runId,
+        stepId: step.id,
+        position: step.position,
+        statusCode: null,
+        statusGroup: null,
+        errorReason: outcome.errorReason,
+        timings: emptyTimings(),
+        assertionResults: [],
+        extractedValues: outcome.extractedValues.map((ev) => ({
+          saveAs: ev.saveAs,
+          value:
+            typeof ev.value === "string"
+              ? ev.value
+              : Array.isArray(ev.value)
+              ? ev.value
+              : ev.value == null
+              ? ""
+              : JSON.stringify(ev.value),
+          fromCache: false,
+        })),
+        attempts: 1,
+        skipped: false,
+        skipReason: null,
+        ok: outcome.ok,
+      });
+      if (!outcome.ok) {
+        allOk = false;
+        if (!failedAtStepId) failedAtStepId = step.id;
+        upstreamFailed = true; // prereqs always stop on failure
+      }
+      continue;
+    }
+
     // Smart cache — bypassed when `force` is set (manual Run-now click).
     if (!options.force && canSkipStepFromCache(step, variables)) {
       const cachedExtractions: ExtractedValue[] = step.extractions.map((ex) => ({
@@ -364,4 +414,38 @@ function emptyTimings(): Timings {
     downloadMs: null,
     totalMs: null,
   };
+}
+
+/** Phase 1.21 — Compute prereq step runtime. Mirrors flowRunner's runComputeStep. */
+function runComputePrereqStep(
+  step: PrereqStep,
+  variables: Record<string, string>
+): {
+  ok: boolean;
+  errorReason: string | null;
+  extractedValues: Array<{ saveAs: string; value: unknown }>;
+} {
+  const cfg = step.compute;
+  if (!cfg || !Array.isArray(cfg.computations) || cfg.computations.length === 0) {
+    return { ok: false, errorReason: "Compute step has no computations", extractedValues: [] };
+  }
+  const out: Array<{ saveAs: string; value: unknown }> = [];
+  const localScope: Scope = { ...variables };
+  for (const row of cfg.computations) {
+    if (!row.saveAs || !row.saveAs.trim()) continue;
+    try {
+      const sourceVal =
+        row.transform.kind === "concat" ? "" : resolveVar([localScope], row.source);
+      const newVal = applyComputeTransform(sourceVal, row.transform, [localScope]);
+      localScope[row.saveAs] = newVal;
+      out.push({ saveAs: row.saveAs, value: newVal });
+    } catch (err: any) {
+      return {
+        ok: false,
+        errorReason: `Compute "${row.saveAs}" failed: ${err?.message ?? String(err)}`,
+        extractedValues: out,
+      };
+    }
+  }
+  return { ok: true, errorReason: null, extractedValues: out };
 }

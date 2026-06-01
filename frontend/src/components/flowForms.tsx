@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   addFlowStep,
   addPrereqStep,
   createFlow,
   deleteFlowStep,
   deletePrereqStep,
+  fetchFlowSampleVars,
   updateFlow,
   updateFlowStep,
   updatePrereqStep,
@@ -14,9 +15,13 @@ import type {
   Assertion,
   AssertionType,
   BodyType,
+  ComputeConfig,
+  ComputeRow,
+  ComputeTransform,
   Extraction,
   ExtractionSource,
   Flow,
+  FlowSampleVars,
   FlowStep,
   FlowWithSteps,
   ForEachConfig,
@@ -25,6 +30,7 @@ import type {
   PrereqStep,
   Project,
   ProjectVariable,
+  StepType,
 } from "../types";
 
 interface BaseProps {
@@ -173,6 +179,9 @@ export function StepEditorForm(
 ) {
   const { flow, project, step, projectVars } = props;
   const editing = !!step;
+  // Phase 1.21 — step type. Edits lock to the existing type; new steps pick at top.
+  const initialStepType: StepType = step?.stepType ?? "http";
+  const [stepType, setStepType] = useState<StepType>(initialStepType);
   const [url, setUrl] = useState(step?.url ?? "");
   const [method, setMethod] = useState<HttpMethod>(step?.method ?? "GET");
   const [description, setDescription] = useState(step?.description ?? "");
@@ -188,6 +197,9 @@ export function StepEditorForm(
   const [maxRetries, setMaxRetries] = useState(step?.maxRetries ?? 0);
   const [retryBackoffMs, setRetryBackoffMs] = useState(step?.retryBackoffMs ?? 1000);
   const [forEach, setForEach] = useState<ForEachConfig | null>(step?.forEach ?? null);
+  const [computeRows, setComputeRows] = useState<ComputeRow[]>(
+    step?.compute?.computations ?? []
+  );
   const [tab, setTab] = useState<StepTab>("basics");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -282,6 +294,74 @@ export function StepEditorForm(
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (stepType === "compute") {
+      const cleaned = computeRows
+        .map((r) => ({ ...r, saveAs: r.saveAs.trim(), source: r.source.trim() }))
+        .filter((r) => r.saveAs);
+      if (cleaned.length === 0) {
+        setErr("Add at least one computation (saveAs is required).");
+        return;
+      }
+      setBusy(true);
+      setErr(null);
+      try {
+        const payload = {
+          // Compute steps don't hit HTTP — backend ignores url/method but the
+          // input contract still expects them. Pass a stable sentinel.
+          url: "compute://step",
+          description: description.trim(),
+          method: "GET" as HttpMethod,
+          stepType: "compute" as const,
+          compute: { computations: cleaned },
+        };
+        if (editing) {
+          await updateFlowStep(step!.id, payload);
+          await props.onDone(`Compute step updated`);
+        } else {
+          await addFlowStep(flow.id, payload);
+          await props.onDone(`Compute step added`);
+        }
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Failed to save compute step");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    if (stepType === "loop") {
+      if (!forEach || !forEach.arrayVarName.trim() || !forEach.itemVarName.trim()) {
+        setErr("Loop step needs both 'iterate over' (array source) and 'as' (item name) set.");
+        return;
+      }
+      setBusy(true);
+      setErr(null);
+      try {
+        const payload = {
+          url: "loop://step",
+          description: description.trim(),
+          method: "GET" as HttpMethod,
+          stepType: "loop" as const,
+          forEach: {
+            arrayVarName: forEach.arrayVarName.trim(),
+            itemVarName: forEach.itemVarName.trim(),
+          },
+        };
+        if (editing) {
+          await updateFlowStep(step!.id, payload);
+          await props.onDone(`Loop step updated`);
+        } else {
+          await addFlowStep(flow.id, payload);
+          await props.onDone(`Loop step added`);
+        }
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Failed to save loop step");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     if (!url.trim()) {
       setTab("basics");
       return;
@@ -304,6 +384,7 @@ export function StepEditorForm(
         waitBeforeMs,
         maxRetries,
         retryBackoffMs,
+        stepType: "http" as const,
         forEach:
           forEach && forEach.arrayVarName.trim() && forEach.itemVarName.trim()
             ? {
@@ -339,6 +420,35 @@ export function StepEditorForm(
 
   return (
     <form className="form" onSubmit={submit}>
+      {!editing && (
+        <StepTypePicker value={stepType} onChange={setStepType} />
+      )}
+      {editing && stepType === "compute" && (
+        <div className="step-type-badge --compute">⚙ Compute step</div>
+      )}
+      {editing && stepType === "loop" && (
+        <div className="step-type-badge --loop">🔁 Loop step</div>
+      )}
+
+      {stepType === "compute" ? (
+        <ComputeStepBody
+          description={description}
+          setDescription={setDescription}
+          rows={computeRows}
+          setRows={setComputeRows}
+          availableVars={availableVars}
+        />
+      ) : stepType === "loop" ? (
+        <LoopStepBody
+          description={description}
+          setDescription={setDescription}
+          forEach={forEach}
+          setForEach={setForEach}
+          arrayVarCandidates={arrayVarCandidates}
+          computedDepth={computedForEachDepth}
+        />
+      ) : (
+        <>
       <div className="builder-tabs">
         <Tab name="basics" current={tab} setTab={setTab}>Basics</Tab>
         <Tab name="params" current={tab} setTab={setTab}>Params{paramCount > 0 ? ` (${paramCount})` : ""}</Tab>
@@ -387,6 +497,7 @@ export function StepEditorForm(
               required
             />
           </div>
+          <URLPreviewPanel template={url} flowId={flow.id} />
           <Field label="Description" hint="What does this step do?">
             <input
               type="text"
@@ -468,6 +579,8 @@ export function StepEditorForm(
           setRetryBackoffMs={setRetryBackoffMs}
         />
       )}
+        </>
+      )}
 
       {err && <div className="inline-error">{err}</div>}
 
@@ -486,7 +599,7 @@ export function StepEditorForm(
           Cancel
         </button>
         <button type="submit" className="primary" disabled={busy}>
-          {busy ? "Saving…" : editing ? "Save step" : "Add step"}
+          {busy ? "Saving…" : editing ? "Save step" : stepType === "compute" ? "Add compute step" : "Add step"}
         </button>
       </div>
     </form>
@@ -503,6 +616,747 @@ function Tab(props: { name: StepTab; current: StepTab; setTab: (t: StepTab) => v
       {props.children}
     </button>
   );
+}
+
+// =============================================================
+// Phase 1.21 — Step type picker (HTTP / Compute / Loop)
+// Phase 1.22 — added Loop card. `allowedTypes` lets prereq forms hide Loop
+// (the prereq runner doesn't support forEach).
+// =============================================================
+function StepTypePicker(props: {
+  value: StepType;
+  onChange: (v: StepType) => void;
+  allowedTypes?: StepType[];
+}) {
+  const { value, onChange, allowedTypes } = props;
+  const show = (t: StepType) => !allowedTypes || allowedTypes.includes(t);
+  return (
+    <div className="step-type-picker">
+      {show("http") && (
+        <button
+          type="button"
+          className={`step-type-card ${value === "http" ? "active" : ""}`}
+          onClick={() => onChange("http")}
+        >
+          <span className="step-type-icon">🌐</span>
+          <span className="step-type-label">HTTP request</span>
+          <span className="step-type-desc">Call an endpoint, check status, capture vars</span>
+        </button>
+      )}
+      {show("compute") && (
+        <button
+          type="button"
+          className={`step-type-card ${value === "compute" ? "active" : ""}`}
+          onClick={() => onChange("compute")}
+        >
+          <span className="step-type-icon">⚙</span>
+          <span className="step-type-label">Compute</span>
+          <span className="step-type-desc">Derive new variables from existing ones — no HTTP call</span>
+        </button>
+      )}
+      {show("loop") && (
+        <button
+          type="button"
+          className={`step-type-card ${value === "loop" ? "active" : ""}`}
+          onClick={() => onChange("loop")}
+        >
+          <span className="step-type-icon">🔁</span>
+          <span className="step-type-label">Loop</span>
+          <span className="step-type-desc">Iterate over an array — provides scope for nested steps, no HTTP call</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+// =============================================================
+// Phase 1.21 — Compute step body (one tab; rows of computations)
+// =============================================================
+const TRANSFORM_KINDS: { value: ComputeTransform["kind"]; label: string; hint: string }[] = [
+  { value: "splitTake", label: "Split & take", hint: 'e.g. "en-US" split "-" take 0 → "en"' },
+  { value: "concat", label: "Concat (template)", hint: 'e.g. "{{lang}}-{{country}}" → "en-US"' },
+  { value: "concatArrays", label: "Concat arrays (merge lists)", hint: 'e.g. countries + regions → one combined list, then Loop it' },
+  { value: "mapAddField", label: "Map: add field to each item", hint: "Loop an array and enrich every item with a derived field" },
+  { value: "lowercase", label: "Lowercase", hint: '"EN" → "en"' },
+  { value: "uppercase", label: "Uppercase", hint: '"en" → "EN"' },
+  { value: "trim", label: "Trim", hint: 'strip leading/trailing whitespace' },
+  { value: "slice", label: "Slice (substring)", hint: 'e.g. start 0 end 3 of "abcdef" → "abc"' },
+  { value: "replace", label: "Replace", hint: 'find/replace all occurrences' },
+];
+
+function defaultTransform(kind: ComputeTransform["kind"]): ComputeTransform {
+  switch (kind) {
+    case "splitTake": return { kind: "splitTake", separator: "-", index: 0 };
+    case "slice": return { kind: "slice", start: 0, end: undefined };
+    case "lowercase": return { kind: "lowercase" };
+    case "uppercase": return { kind: "uppercase" };
+    case "trim": return { kind: "trim" };
+    case "replace": return { kind: "replace", find: "", replace: "" };
+    case "concat": return { kind: "concat", template: "" };
+    case "mapAddField":
+      return {
+        kind: "mapAddField",
+        fieldName: "language",
+        sourceField: "locale",
+        inner: { kind: "splitTake", separator: "-", index: 0 },
+      };
+    case "concatArrays": return { kind: "concatArrays", sources: ["", ""] };
+  }
+}
+
+function ComputeStepBody(props: {
+  description: string;
+  setDescription: (v: string) => void;
+  rows: ComputeRow[];
+  setRows: (rows: ComputeRow[]) => void;
+  availableVars: { name: string; from: string }[];
+}) {
+  const { description, setDescription, rows, setRows, availableVars } = props;
+
+  function addRow() {
+    const newRow: ComputeRow = {
+      saveAs: "",
+      source: availableVars[0]?.name ?? "",
+      transform: defaultTransform("splitTake"),
+    };
+    setRows([...rows, newRow]);
+  }
+  function updateRow(idx: number, patch: Partial<ComputeRow>) {
+    setRows(rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+  }
+  function removeRow(idx: number) {
+    setRows(rows.filter((_, i) => i !== idx));
+  }
+
+  return (
+    <>
+      {availableVars.length > 0 && (
+        <div className="vars-hint">
+          <strong>Available variables</strong> (from earlier steps): {" "}
+          {availableVars.map((v, i) => (
+            <span key={i} className="var-chip">
+              <code>{`{{${v.name}}}`}</code> <span className="muted small">· {v.from}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <Field label="Description" hint="What does this compute step derive?">
+        <input
+          type="text"
+          placeholder="e.g. Derive language from locale; enrich campaigns with it"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </Field>
+
+      <p className="sub small" style={{ marginTop: 8 }}>
+        Compute steps derive new variables from existing ones. No HTTP call is made.
+        Rows run in order — later rows can reference variables saved by earlier rows in this step.
+      </p>
+
+      {rows.length === 0 && (
+        <div className="empty-inline" style={{ flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+          <span>No computations yet. Click "Add computation" to derive your first variable.</span>
+        </div>
+      )}
+
+      <div className="compute-rows">
+        {rows.map((row, idx) => (
+          <ComputeRowEditor
+            key={idx}
+            index={idx}
+            row={row}
+            update={(patch) => updateRow(idx, patch)}
+            remove={() => removeRow(idx)}
+          />
+        ))}
+      </div>
+
+      <button type="button" className="ghost small" style={{ marginTop: 10 }} onClick={addRow}>
+        + Add computation
+      </button>
+    </>
+  );
+}
+
+// =============================================================
+// Phase 1.22 — Loop step body (pure iteration scope, no HTTP call)
+// =============================================================
+function LoopStepBody(props: {
+  description: string;
+  setDescription: (v: string) => void;
+  forEach: ForEachConfig | null;
+  setForEach: (v: ForEachConfig | null) => void;
+  arrayVarCandidates: ArrayVarCandidate[];
+  computedDepth: number;
+}) {
+  const { description, setDescription, forEach, setForEach, arrayVarCandidates, computedDepth } = props;
+  return (
+    <>
+      <Field label="Description" hint="What does this loop iterate over?">
+        <input
+          type="text"
+          placeholder="e.g. Outer loop: per campaign"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </Field>
+
+      <p className="sub small" style={{ marginTop: 8 }}>
+        Loop steps don't make an HTTP call. They open a for-each scope so the next steps
+        (HTTP or another Loop) can iterate over an array variable. Use this to nest loops
+        without adding throwaway placeholder requests.
+      </p>
+
+      <ForEachEditor
+        forEach={forEach}
+        setForEach={setForEach}
+        arrayVarCandidates={arrayVarCandidates}
+        computedDepth={computedDepth}
+      />
+    </>
+  );
+}
+
+function ComputeRowEditor(props: {
+  index: number;
+  row: ComputeRow;
+  update: (patch: Partial<ComputeRow>) => void;
+  remove: () => void;
+}) {
+  const { index, row, update, remove } = props;
+  const t = row.transform;
+
+  function changeKind(kind: ComputeTransform["kind"]) {
+    update({ transform: defaultTransform(kind) });
+  }
+  function patchTransform(patch: Partial<ComputeTransform>) {
+    update({ transform: { ...t, ...patch } as ComputeTransform });
+  }
+
+  const needsSource = t.kind !== "concat" && t.kind !== "concatArrays" && t.kind !== "mapAddField";
+
+  return (
+    <div className="compute-row-card">
+      <div className="compute-row-head">
+        <span className="compute-row-num">#{index + 1}</span>
+        <input
+          type="text"
+          className="compute-saveas"
+          placeholder="new variable name (e.g. language)"
+          value={row.saveAs}
+          onChange={(e) => update({ saveAs: e.target.value })}
+        />
+        <span className="compute-row-arrow muted small">=</span>
+        <select
+          className="compute-kind-select"
+          value={t.kind}
+          onChange={(e) => changeKind(e.target.value as ComputeTransform["kind"])}
+          title={TRANSFORM_KINDS.find((k) => k.value === t.kind)?.hint}
+        >
+          {TRANSFORM_KINDS.map((k) => (
+            <option key={k.value} value={k.value}>{k.label}</option>
+          ))}
+        </select>
+        <button type="button" className="ghost destructive small" onClick={remove}>×</button>
+      </div>
+
+      {needsSource && (
+        <Field label="Source variable" hint="Variable name or dotted path, e.g. campaign.locale">
+          <input
+            type="text"
+            placeholder="locale"
+            value={row.source}
+            onChange={(e) => update({ source: e.target.value })}
+          />
+        </Field>
+      )}
+
+      {t.kind === "splitTake" && (
+        <div className="form-row">
+          <Field label="Separator" hint='Character(s) to split on'>
+            <input
+              type="text"
+              placeholder="-"
+              value={t.separator}
+              onChange={(e) => patchTransform({ separator: e.target.value })}
+              style={{ width: 100 }}
+            />
+          </Field>
+          <Field label="Index" hint='0 = first piece; -1 = last'>
+            <input
+              type="number"
+              value={t.index}
+              onChange={(e) => patchTransform({ index: Number(e.target.value) || 0 })}
+              style={{ width: 100 }}
+            />
+          </Field>
+        </div>
+      )}
+
+      {t.kind === "slice" && (
+        <div className="form-row">
+          <Field label="Start" hint="0-indexed">
+            <input
+              type="number"
+              value={t.start}
+              onChange={(e) => patchTransform({ start: Number(e.target.value) || 0 })}
+              style={{ width: 100 }}
+            />
+          </Field>
+          <Field label="End (optional)" hint="exclusive; leave blank for end-of-string">
+            <input
+              type="number"
+              value={t.end ?? ""}
+              onChange={(e) =>
+                patchTransform({ end: e.target.value === "" ? undefined : Number(e.target.value) })
+              }
+              style={{ width: 100 }}
+            />
+          </Field>
+        </div>
+      )}
+
+      {t.kind === "replace" && (
+        <div className="form-row">
+          <Field label="Find">
+            <input
+              type="text"
+              value={t.find}
+              onChange={(e) => patchTransform({ find: e.target.value })}
+            />
+          </Field>
+          <Field label="Replace with">
+            <input
+              type="text"
+              value={t.replace}
+              onChange={(e) => patchTransform({ replace: e.target.value })}
+            />
+          </Field>
+        </div>
+      )}
+
+      {t.kind === "concat" && (
+        <Field label="Template" hint='Use {{var}} references — e.g. "{{language}}-{{country}}"'>
+          <input
+            type="text"
+            placeholder="{{language}}-{{country}}"
+            value={t.template}
+            onChange={(e) => patchTransform({ template: e.target.value })}
+          />
+        </Field>
+      )}
+
+      {t.kind === "concatArrays" && (
+        <>
+          <p className="sub small" style={{ marginTop: 4 }}>
+            Merges two or more array variables into one combined array. Use it before
+            a Loop step to iterate over the merged list (e.g. <code>countries</code> +{" "}
+            <code>regions</code> → one loop hitting every geo).
+          </p>
+          <Field
+            label="Array variables to merge (in order)"
+            hint="One variable name per row. Each must resolve to an array. Empty rows are skipped."
+          >
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {t.sources.map((name, i) => (
+                <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <span className="muted small" style={{ width: 18, textAlign: "right" }}>
+                    {i + 1}.
+                  </span>
+                  <input
+                    type="text"
+                    placeholder={i === 0 ? "countries" : i === 1 ? "regions" : "another_array"}
+                    value={name}
+                    onChange={(e) => {
+                      const next = [...t.sources];
+                      next[i] = e.target.value;
+                      patchTransform({ sources: next });
+                    }}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="ghost destructive small"
+                    onClick={() => {
+                      if (t.sources.length <= 1) return;
+                      patchTransform({ sources: t.sources.filter((_, j) => j !== i) });
+                    }}
+                    disabled={t.sources.length <= 1}
+                    title={t.sources.length <= 1 ? "Need at least one row" : "Remove"}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Field>
+          <button
+            type="button"
+            className="ghost small"
+            style={{ marginTop: 4 }}
+            onClick={() => patchTransform({ sources: [...t.sources, ""] })}
+          >
+            + Add another array
+          </button>
+        </>
+      )}
+
+      {t.kind === "mapAddField" && (
+        <>
+          <p className="sub small" style={{ marginTop: 4 }}>
+            Walks each element of <code>{row.source || "(source)"}</code> and adds a new field
+            derived from one of its existing fields. The source variable must be an array.
+          </p>
+          <div className="form-row">
+            <Field label="Source array variable" hint="A [*] extraction array, e.g. campaigns">
+              <input
+                type="text"
+                placeholder="campaigns"
+                value={row.source}
+                onChange={(e) => update({ source: e.target.value })}
+              />
+            </Field>
+            <Field label="New field name" hint="Added to every element">
+              <input
+                type="text"
+                placeholder="language"
+                value={t.fieldName}
+                onChange={(e) => patchTransform({ fieldName: e.target.value })}
+              />
+            </Field>
+          </div>
+          <div className="form-row">
+            <Field label="Read from field" hint="Existing field on each element">
+              <input
+                type="text"
+                placeholder="locale"
+                value={t.sourceField}
+                onChange={(e) => patchTransform({ sourceField: e.target.value })}
+              />
+            </Field>
+            <Field label="Inner transform" hint="Applied to each element's source field value">
+              <select
+                value={t.inner.kind}
+                onChange={(e) => patchTransform({ inner: defaultTransform(e.target.value as ComputeTransform["kind"]) })}
+              >
+                {TRANSFORM_KINDS.filter((k) => k.value !== "mapAddField").map((k) => (
+                  <option key={k.value} value={k.value}>{k.label}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <MapAddFieldInnerEditor inner={t.inner} setInner={(v) => patchTransform({ inner: v })} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function MapAddFieldInnerEditor(props: {
+  inner: ComputeTransform;
+  setInner: (v: ComputeTransform) => void;
+}) {
+  const { inner, setInner } = props;
+  function patch(p: Partial<ComputeTransform>) {
+    setInner({ ...inner, ...p } as ComputeTransform);
+  }
+  if (inner.kind === "splitTake") {
+    return (
+      <div className="form-row">
+        <Field label="Separator">
+          <input type="text" value={inner.separator} onChange={(e) => patch({ separator: e.target.value })} style={{ width: 100 }} />
+        </Field>
+        <Field label="Index">
+          <input type="number" value={inner.index} onChange={(e) => patch({ index: Number(e.target.value) || 0 })} style={{ width: 100 }} />
+        </Field>
+      </div>
+    );
+  }
+  if (inner.kind === "slice") {
+    return (
+      <div className="form-row">
+        <Field label="Start"><input type="number" value={inner.start} onChange={(e) => patch({ start: Number(e.target.value) || 0 })} style={{ width: 100 }} /></Field>
+        <Field label="End"><input type="number" value={inner.end ?? ""} onChange={(e) => patch({ end: e.target.value === "" ? undefined : Number(e.target.value) })} style={{ width: 100 }} /></Field>
+      </div>
+    );
+  }
+  if (inner.kind === "replace") {
+    return (
+      <div className="form-row">
+        <Field label="Find"><input type="text" value={inner.find} onChange={(e) => patch({ find: e.target.value })} /></Field>
+        <Field label="Replace with"><input type="text" value={inner.replace} onChange={(e) => patch({ replace: e.target.value })} /></Field>
+      </div>
+    );
+  }
+  if (inner.kind === "concat") {
+    return (
+      <Field label="Template" hint='Use {{var}} references'>
+        <input type="text" value={inner.template} onChange={(e) => patch({ template: e.target.value })} />
+      </Field>
+    );
+  }
+  if (inner.kind === "concatArrays") {
+    return (
+      <>
+        <p className="sub small" style={{ marginTop: 4 }}>
+          Inside <code>mapAddField</code>, each source name resolves against the current
+          element first (e.g. <code>countries</code>, <code>regions</code> as fields of every
+          campaign), then falls back to outer scope.
+        </p>
+        <Field
+          label="Array fields to merge (in order)"
+          hint="One field name per row. Each must be an array on the current element. Empty rows are skipped."
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {inner.sources.map((name, i) => (
+              <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span className="muted small" style={{ width: 18, textAlign: "right" }}>
+                  {i + 1}.
+                </span>
+                <input
+                  type="text"
+                  placeholder={i === 0 ? "countries" : i === 1 ? "regions" : "another_array"}
+                  value={name}
+                  onChange={(e) => {
+                    const next = [...inner.sources];
+                    next[i] = e.target.value;
+                    patch({ sources: next });
+                  }}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="ghost destructive small"
+                  onClick={() => {
+                    if (inner.sources.length <= 1) return;
+                    patch({ sources: inner.sources.filter((_, j) => j !== i) });
+                  }}
+                  disabled={inner.sources.length <= 1}
+                  title={inner.sources.length <= 1 ? "Need at least one row" : "Remove"}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </Field>
+        <button
+          type="button"
+          className="ghost small"
+          style={{ marginTop: 4 }}
+          onClick={() => patch({ sources: [...inner.sources, ""] })}
+        >
+          + Add another array
+        </button>
+      </>
+    );
+  }
+  return null;
+}
+
+// =============================================================
+// Phase 1.21 — Live URL preview panel
+// =============================================================
+type PreviewSegment = { text: string; kind: "literal" | "resolved" | "unresolved" };
+type PreviewRow = { url: string; segments: PreviewSegment[] };
+type PreviewResult = {
+  rows: PreviewRow[];
+  estimatedTotal: number;
+  sampledCount: number;
+  hasUnresolved: boolean;
+};
+
+function URLPreviewPanel(props: { template: string; flowId: string }) {
+  const { template, flowId } = props;
+  const [sample, setSample] = useState<FlowSampleVars | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchFlowSampleVars(flowId)
+      .then((s) => { if (!cancelled) setSample(s); })
+      .catch((e) => { if (!cancelled) setLoadErr(e instanceof Error ? e.message : "Failed"); });
+    return () => { cancelled = true; };
+  }, [flowId]);
+
+  const hasTemplateVars = useMemo(() => /\{\{\s*[a-zA-Z_][\w.-]*\s*\}\}/.test(template), [template]);
+
+  const preview = useMemo<PreviewResult | null>(() => {
+    if (!hasTemplateVars) return null;
+    if (!sample) return null;
+    return expandTemplateForPreviewClient({
+      template,
+      sampleVars: sample.variables,
+      iterables: sample.iterables,
+      maxSamples: 20,
+    });
+  }, [template, sample, hasTemplateVars]);
+
+  if (!hasTemplateVars) return null;
+
+  if (loadErr) {
+    return (
+      <div className="url-preview-panel --error">
+        🔭 Preview unavailable: {loadErr}
+      </div>
+    );
+  }
+
+  if (!sample) {
+    return <div className="url-preview-panel --loading">🔭 Preview — loading sample data…</div>;
+  }
+
+  if (!sample.hasSample) {
+    return (
+      <div className="url-preview-panel --empty">
+        🔭 Preview — no sample data yet. Run this flow once to see what URLs your template will fetch.
+      </div>
+    );
+  }
+
+  if (!preview) return null;
+
+  return (
+    <div className="url-preview-panel">
+      <div className="url-preview-header">
+        <span>🔭 Preview — based on last successful run</span>
+        <span className={`url-preview-count-badge ${preview.hasUnresolved ? "--warn" : ""}`}>
+          Will generate ~{preview.estimatedTotal.toLocaleString()} call{preview.estimatedTotal === 1 ? "" : "s"} per run
+        </span>
+      </div>
+      <div className="url-preview-list">
+        {preview.rows.map((r, i) => (
+          <div key={i} className="url-preview-row">
+            {r.segments.map((s, j) => (
+              <span key={j} className={`url-preview-segment --${s.kind}`}>{s.text}</span>
+            ))}
+          </div>
+        ))}
+      </div>
+      {preview.sampledCount < preview.estimatedTotal && (
+        <div className="url-preview-footer muted small">
+          Showing first {preview.sampledCount} of ~{preview.estimatedTotal.toLocaleString()} resolved URLs.
+        </div>
+      )}
+      {preview.hasUnresolved && (
+        <div className="url-preview-footer --warn">
+          ⚠ Some <code>{`{{vars}}`}</code> didn't resolve. Check spelling or that an earlier step's
+          <code> saveAs</code> matches.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Mirror of backend extraction.ts:expandTemplateForPreview + resolveVar + toScalar.
+// Kept inline so the panel updates live as the user types without hitting the API.
+function expandTemplateForPreviewClient(args: {
+  template: string;
+  sampleVars: Record<string, unknown>;
+  iterables: Record<string, string>;
+  maxSamples?: number;
+}): PreviewResult {
+  const { template, sampleVars, iterables, maxSamples = 20 } = args;
+  const re = /\{\{\s*([a-zA-Z_][\w.-]*)\s*\}\}/g;
+  const referenced = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(template)) !== null) {
+    referenced.add(m[1].split(".")[0]);
+  }
+  const activeIterables: { name: string; items: unknown[] }[] = [];
+  for (const [itemName, arrayPath] of Object.entries(iterables)) {
+    if (!referenced.has(itemName)) continue;
+    const arr = resolveVarClient([sampleVars], arrayPath);
+    if (Array.isArray(arr) && arr.length > 0) {
+      activeIterables.push({ name: itemName, items: arr });
+    }
+  }
+  const totalCombos = activeIterables.reduce((acc, it) => acc * it.items.length, 1);
+  const cap = Math.min(totalCombos, maxSamples);
+  const rows: PreviewRow[] = [];
+  let hasUnresolved = false;
+  for (let i = 0; i < cap; i++) {
+    const iterScope: Record<string, unknown> = {};
+    let remainder = i;
+    for (const src of activeIterables) {
+      const len = src.items.length;
+      const idx = remainder % len;
+      remainder = Math.floor(remainder / len);
+      iterScope[src.name] = src.items[idx];
+    }
+    const row = buildPreviewRowClient(template, [sampleVars, iterScope]);
+    if (row.segments.some((s) => s.kind === "unresolved")) hasUnresolved = true;
+    rows.push(row);
+  }
+  if (cap === 0) {
+    rows.push(buildPreviewRowClient(template, [sampleVars]));
+    if (rows[0].segments.some((s) => s.kind === "unresolved")) hasUnresolved = true;
+  }
+  return {
+    rows,
+    estimatedTotal: totalCombos,
+    sampledCount: rows.length,
+    hasUnresolved,
+  };
+}
+
+function buildPreviewRowClient(template: string, stack: Record<string, unknown>[]): PreviewRow {
+  const segments: PreviewSegment[] = [];
+  const re = /\{\{\s*([a-zA-Z_][\w.-]*)\s*\}\}/g;
+  let cursor = 0;
+  let urlOut = "";
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(template)) !== null) {
+    if (match.index > cursor) {
+      const literal = template.slice(cursor, match.index);
+      segments.push({ text: literal, kind: "literal" });
+      urlOut += literal;
+    }
+    const name = match[1];
+    const resolved = resolveVarClient(stack, name);
+    if (resolved == null || resolved === "") {
+      segments.push({ text: `{{${name}}}`, kind: "unresolved" });
+      urlOut += `{{${name}}}`;
+    } else {
+      const text = toScalarClient(resolved);
+      segments.push({ text, kind: "resolved" });
+      urlOut += text;
+    }
+    cursor = re.lastIndex;
+  }
+  if (cursor < template.length) {
+    const tail = template.slice(cursor);
+    segments.push({ text: tail, kind: "literal" });
+    urlOut += tail;
+  }
+  return { url: urlOut, segments };
+}
+
+function resolveVarClient(stack: Record<string, unknown>[], name: string): unknown {
+  const parts = name.split(".");
+  const root = parts[0];
+  for (let s = stack.length - 1; s >= 0; s--) {
+    const vars = stack[s];
+    if (Object.prototype.hasOwnProperty.call(vars, name) && vars[name] != null) {
+      return vars[name];
+    }
+    if (!Object.prototype.hasOwnProperty.call(vars, root)) continue;
+    let cur: any = vars[root];
+    for (let i = 1; i < parts.length; i++) {
+      if (cur == null) return undefined;
+      cur = cur[parts[i]];
+    }
+    if (cur != null) return cur;
+  }
+  return undefined;
+}
+
+function toScalarClient(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return JSON.stringify(v);
 }
 
 // =============================================================
@@ -985,6 +1839,8 @@ export function PrereqStepEditorForm(
 ) {
   const { project, step, siblingSteps } = props;
   const editing = !!step;
+  const initialStepType: StepType = step?.stepType ?? "http";
+  const [stepType, setStepType] = useState<StepType>(initialStepType);
   const [url, setUrl] = useState(step?.url ?? "");
   const [method, setMethod] = useState<HttpMethod>(step?.method ?? "POST");
   const [description, setDescription] = useState(step?.description ?? "");
@@ -999,6 +1855,9 @@ export function PrereqStepEditorForm(
   const [waitBeforeMs, setWaitBeforeMs] = useState(step?.waitBeforeMs ?? 0);
   const [maxRetries, setMaxRetries] = useState(step?.maxRetries ?? 0);
   const [retryBackoffMs, setRetryBackoffMs] = useState(step?.retryBackoffMs ?? 1000);
+  const [computeRows, setComputeRows] = useState<ComputeRow[]>(
+    step?.compute?.computations ?? []
+  );
   const [tab, setTab] = useState<StepTab>("basics");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1023,6 +1882,39 @@ export function PrereqStepEditorForm(
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (stepType === "compute") {
+      const cleaned = computeRows
+        .map((r) => ({ ...r, saveAs: r.saveAs.trim(), source: r.source.trim() }))
+        .filter((r) => r.saveAs);
+      if (cleaned.length === 0) {
+        setErr("Add at least one computation (saveAs is required).");
+        return;
+      }
+      setBusy(true);
+      setErr(null);
+      try {
+        const payload = {
+          url: "compute://step",
+          description: description.trim(),
+          method: "GET" as HttpMethod,
+          stepType: "compute" as const,
+          compute: { computations: cleaned },
+        };
+        if (editing) {
+          await updatePrereqStep(step!.id, payload);
+          await props.onDone(`Compute prereq step updated`);
+        } else {
+          await addPrereqStep(project.id, payload);
+          await props.onDone(`Compute prereq step added`);
+        }
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Failed to save compute step");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     if (!url.trim()) {
       setTab("basics");
       return;
@@ -1045,6 +1937,7 @@ export function PrereqStepEditorForm(
         waitBeforeMs,
         maxRetries,
         retryBackoffMs,
+        stepType: "http" as const,
       };
       if (editing) {
         await updatePrereqStep(step!.id, payload);
@@ -1073,6 +1966,27 @@ export function PrereqStepEditorForm(
 
   return (
     <form className="form" onSubmit={submit}>
+      {!editing && (
+        <StepTypePicker
+          value={stepType}
+          onChange={setStepType}
+          allowedTypes={["http", "compute"]}
+        />
+      )}
+      {editing && stepType === "compute" && (
+        <div className="step-type-badge --compute">⚙ Compute prereq step</div>
+      )}
+
+      {stepType === "compute" ? (
+        <ComputeStepBody
+          description={description}
+          setDescription={setDescription}
+          rows={computeRows}
+          setRows={setComputeRows}
+          availableVars={availableVars}
+        />
+      ) : (
+        <>
       <div className="builder-tabs">
         <Tab name="basics" current={tab} setTab={setTab}>Basics</Tab>
         <Tab name="params" current={tab} setTab={setTab}>Params{paramCount > 0 ? ` (${paramCount})` : ""}</Tab>
@@ -1194,6 +2108,8 @@ export function PrereqStepEditorForm(
           setRetryBackoffMs={setRetryBackoffMs}
         />
       )}
+        </>
+      )}
 
       {err && <div className="inline-error">{err}</div>}
 
@@ -1212,7 +2128,7 @@ export function PrereqStepEditorForm(
           Cancel
         </button>
         <button type="submit" className="primary" disabled={busy}>
-          {busy ? "Saving…" : editing ? "Save step" : "Add step"}
+          {busy ? "Saving…" : editing ? "Save step" : stepType === "compute" ? "Add compute step" : "Add step"}
         </button>
       </div>
     </form>
