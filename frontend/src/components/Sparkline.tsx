@@ -1,4 +1,5 @@
 import type { SparklinePoint } from "../types";
+import { formatLatency } from "../utils/format";
 
 interface Props {
   points: SparklinePoint[];
@@ -80,7 +81,8 @@ export function Sparkline({ points, width = 200, height = 40, showAxis = false }
       {failureDots}
       {showAxis && (
         <text x={width - 2} y={10} fontSize="9" fill="var(--muted)" textAnchor="end">
-          {max}ms
+          <title>{`${max}ms`}</title>
+          {formatLatency(max)}
         </text>
       )}
     </svg>

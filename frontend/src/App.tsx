@@ -126,6 +126,9 @@ export default function App() {
   const [busyCheckUrls, setBusyCheckUrls] = useState<string | null>(null);
   const toastSeq = useRef(0);
   const timer = useRef<number | null>(null);
+  // Polls fire every 3s — surface connection loss once on the down-edge and
+  // again on recovery, not every failed tick (would spam the toast stack).
+  const connectionLost = useRef(false);
   /**
    * In-memory per-project scroll position cache.
    * Switching projects: save outgoing scrollY → restore incoming (or 0 on first visit).
@@ -244,8 +247,16 @@ export default function App() {
         if (saved && data.projects.some((p) => p.id === saved)) return saved;
         return data.projects[0]?.id ?? null;
       });
+      if (connectionLost.current) {
+        connectionLost.current = false;
+        pushToast("Reconnected to the server.", "success");
+      }
     } catch (e) {
       console.error(e);
+      if (!connectionLost.current) {
+        connectionLost.current = true;
+        pushToast("Lost connection to the backend — showing stale data until it returns.", "error");
+      }
     }
   }
 

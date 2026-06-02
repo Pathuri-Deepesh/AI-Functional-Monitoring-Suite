@@ -38,6 +38,7 @@ import type {
   StepResult,
 } from "../types";
 import { checkStepVarRefs } from "../utils/varRefs";
+import { formatLatency, formatRelative } from "../utils/format";
 import { GripIcon, StepDragPreview } from "./StepDragHandle";
 
 const POLL_MS = 500;
@@ -293,7 +294,7 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
           {project.prereqLastRunAt && (
             <span className="muted small" title={new Date(project.prereqLastRunAt).toLocaleString()}>
               Last run {formatRelative(project.prereqLastRunAt)}
-              {project.prereqLastRunTotalMs != null && ` · ${project.prereqLastRunTotalMs}ms`}
+              {project.prereqLastRunTotalMs != null && ` · ${formatLatency(project.prereqLastRunTotalMs)}`}
             </span>
           )}
         </div>
@@ -302,7 +303,7 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
             className="ghost small btn-busy"
             onClick={() => handleRun()}
             disabled={running || !hasSteps}
-            title={hasSteps ? "Run the prereq chain now" : "Add a step first"}
+            title={running ? "Prereq chain is running — wait for it to finish" : !hasSteps ? "Add a step first" : "Run the prereq chain now (force-refreshes all variables)"}
           >
             {running ? (<><Spinner size={11} /><span>Running…</span></>) : "▶ Run now"}
           </button>
@@ -410,8 +411,8 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
               <div className="flow-add-step">
                 <button className="ghost small" onClick={() => onAddStep(steps)}>+ Add prereq step</button>
                 {lastRun && (
-                  <span className="muted small">
-                    Last run: {new Date(lastRun.startedAt).toLocaleString()}
+                  <span className="muted small" title={new Date(lastRun.startedAt).toLocaleString()}>
+                    Last run: {formatRelative(lastRun.startedAt)}
                   </span>
                 )}
               </div>
@@ -659,7 +660,7 @@ function PrereqStepRow(props: {
         {result && (
           <div className="step-result-meta">
             {result.timings.totalMs != null && (
-              <span className="meta-chip">⏱ {result.timings.totalMs}ms</span>
+              <span className="meta-chip" title={`${result.timings.totalMs}ms`}>⏱ {formatLatency(result.timings.totalMs)}</span>
             )}
             {result.attempts > 1 && (
               <span className="meta-chip warn">🔁 {result.attempts} attempts</span>
@@ -693,14 +694,6 @@ function PrereqStepRow(props: {
       <div className="step-edit-hint">edit ›</div>
     </div>
   );
-}
-
-function formatRelative(ts: number): string {
-  const diffSec = Math.floor((Date.now() - ts) / 1000);
-  if (diffSec < 60) return `${diffSec}s ago`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
 }
 
 function formatTtl(expiresAt: number | null): string {

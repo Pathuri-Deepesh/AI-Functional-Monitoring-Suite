@@ -1,4 +1,5 @@
 import type { Timings } from "../types";
+import { formatLatency } from "../utils/format";
 
 const PHASES: Array<{
   key: keyof Timings;
@@ -39,7 +40,7 @@ export function LatencyBar(props: { timings: Timings | null }) {
               key={p.key}
               className="latency-segment"
               style={{ width: `${pct}%`, background: p.color }}
-              title={`${p.label}: ${v}ms — ${p.tip}`}
+              title={`${p.label}: ${formatLatency(v)} — ${p.tip}`}
             />
           );
         })}
@@ -51,13 +52,13 @@ export function LatencyBar(props: { timings: Timings | null }) {
             <div key={p.key} className="latency-chip" title={p.tip}>
               <span className="latency-dot" style={{ background: p.color }} />
               <span className="latency-chip-label">{p.label}</span>
-              <span className="latency-chip-value">{v != null ? `${v}ms` : "—"}</span>
+              <span className="latency-chip-value" title={v != null ? `${v}ms` : undefined}>{v != null ? formatLatency(v) : "—"}</span>
             </div>
           );
         })}
         <div className="latency-chip latency-total">
           <span className="latency-chip-label">Total</span>
-          <span className="latency-chip-value">{t.totalMs}ms</span>
+          <span className="latency-chip-value" title={`${t.totalMs}ms`}>{formatLatency(t.totalMs)}</span>
         </div>
       </div>
     </div>

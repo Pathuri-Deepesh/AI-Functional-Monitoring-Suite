@@ -5,6 +5,7 @@ import { TimeRangeSelector } from "./TimeRangeSelector";
 import { FlowCard } from "./FlowCard";
 import { PrereqsPanel } from "./PrereqsPanel";
 import { Spinner } from "./Spinner";
+import { formatLatency, formatRelative } from "../utils/format";
 import {
   checkAllUrls,
   fetchFlowRun,
@@ -330,7 +331,7 @@ export function ProjectView(props: Props) {
       const allOk =
         u.failed === 0 && flowsOk === flowResults.length && prereqsOk !== false;
       props.onToast(
-        `Full check done — URLs: ${u.ok}/${u.checked} ok, Flows: ${flowsOk}/${flowResults.length} ok, Prereqs: ${prereqLabel} (${durMs}ms)`,
+        `Full check done — URLs: ${u.ok}/${u.checked} ok, Flows: ${flowsOk}/${flowResults.length} ok, Prereqs: ${prereqLabel} (${formatLatency(durMs)})`,
         allOk ? "success" : "error"
       );
     } catch (e) {
@@ -379,7 +380,7 @@ export function ProjectView(props: Props) {
             className="primary"
             onClick={runFullCheckOrchestrator}
             disabled={fullCheckBusy}
-            title="Run prereqs (if enabled), every standalone URL, and every enabled flow right now"
+            title={fullCheckBusy ? "Full check is already running — wait for it to finish" : "Run prereqs (if enabled), every standalone URL, and every enabled flow right now"}
           >
             {fullCheckBusy ? (
               <><Spinner size={11} /><span style={{ marginLeft: 6 }}>Running full check…</span></>
@@ -668,7 +669,13 @@ function UrlsSectionPanel(props: {
                 className="primary check-all-urls-btn"
                 onClick={props.onCheckAllUrls}
                 disabled={props.checkAllUrlsBusy || urls.length === 0}
-                title="Run every standalone URL in this project right now (ignores flows + prereqs)"
+                title={
+                  props.checkAllUrlsBusy
+                    ? "Already checking — please wait"
+                    : urls.length === 0
+                      ? "Add a URL first"
+                      : "Run every standalone URL in this project right now (ignores flows + prereqs)"
+                }
               >
                 {props.checkAllUrlsBusy ? "Checking…" : "⚡ Check all now"}
               </button>
@@ -819,12 +826,9 @@ function FlowsSectionPanel(props: {
               {avgRunMs != null && (
                 <div
                   className="fk-cell"
-                  title="Average duration of the most recent run, across all flows"
+                  title={`Average duration of the most recent run, across all flows — ${avgRunMs}ms`}
                 >
-                  <span className="fk-num">
-                    {avgRunMs}
-                    <span className="fk-unit">ms</span>
-                  </span>
+                  <span className="fk-num">{formatLatency(avgRunMs)}</span>
                   <span className="fk-lbl">Avg run</span>
                 </div>
               )}
@@ -869,14 +873,6 @@ function FlowsSectionPanel(props: {
       </div>
     </section>
   );
-}
-
-function formatRelative(ts: number): string {
-  const diffSec = Math.floor((Date.now() - ts) / 1000);
-  if (diffSec < 60) return `${diffSec}s ago`;
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return `${Math.floor(diffSec / 86400)}d ago`;
 }
 
 // =============================================================

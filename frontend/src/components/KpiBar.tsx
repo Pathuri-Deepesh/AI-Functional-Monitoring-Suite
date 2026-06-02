@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { Sparkline } from "./Sparkline";
 import type { Flow, MonitoredUrl, SparklinePoint } from "../types";
+import { formatLatency } from "../utils/format";
 
 function formatTrendLabel(windowMinutes: number): string {
   const days = windowMinutes / (60 * 24);
@@ -124,9 +125,8 @@ export function KpiBar({ urls, flows = [], sparklineByUrl, windowMinutes = 24 * 
       </div>
 
       <div className="kpi-card">
-        <div className="kpi-num">
-          {stats.avgLatency != null ? `${stats.avgLatency}` : "—"}
-          <span className="kpi-unit">ms</span>
+        <div className="kpi-num" title={stats.avgLatency != null ? `${stats.avgLatency}ms` : undefined}>
+          {stats.avgLatency != null ? formatLatency(stats.avgLatency) : "—"}
         </div>
         <div className="kpi-lbl">Avg URL Latency</div>
         {hasFlows && <div className="kpi-breakdown">flows tracked separately</div>}

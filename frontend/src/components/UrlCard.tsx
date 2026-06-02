@@ -4,6 +4,7 @@ import { ActivityTimeline } from "./ActivityTimeline";
 import { FailureChip } from "./FailureChip";
 import { Spinner } from "./Spinner";
 import { fetchHistory, fetchSparkline, fetchStats } from "../api";
+import { formatRelative } from "../utils/format";
 import type { CheckRecord, MonitoredUrl, Project, SparklinePoint, StatusGroup, UrlStats } from "../types";
 
 const GROUP_COLOR: Record<StatusGroup, string> = {
@@ -140,9 +141,9 @@ export function UrlCard(props: Props) {
           )}
           <FailureChip stats={stats} />
         </div>
-        <span className="muted">
+        <span className="muted" title={url.lastChecked ? new Date(url.lastChecked).toLocaleString() : undefined}>
           {url.lastChecked
-            ? `Last check: ${new Date(url.lastChecked).toLocaleTimeString()}`
+            ? `Last check: ${formatRelative(url.lastChecked)}`
             : "Not checked yet"}
         </span>
       </div>

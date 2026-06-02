@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { CheckRecord } from "../types";
+import { formatLatency } from "../utils/format";
 
 interface Props {
   history: CheckRecord[];
@@ -164,7 +165,7 @@ export function ActivityTimeline({ history, windowMinutes = 24 * 60, buckets = 6
                 </div>
                 <div className="tt-row">
                   <span className="tt-key">Avg latency</span>
-                  <span className="tt-val">{tooltip.avgLatencyMs}ms</span>
+                  <span className="tt-val" title={`${tooltip.avgLatencyMs}ms`}>{formatLatency(tooltip.avgLatencyMs)}</span>
                 </div>
                 {tooltip.failures + tooltip.warns > 0 && (
                   <div className="tt-row">

@@ -42,6 +42,7 @@ import type {
   StepType,
 } from "../types";
 import { checkStepVarRefs } from "../utils/varRefs";
+import { formatLatency, formatRelative } from "../utils/format";
 import { MoveCopyStepModal } from "./MoveCopyStepModal";
 import { GripIcon, StepDragPreview } from "./StepDragHandle";
 
@@ -345,7 +346,7 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
         <div className="flow-meta">
           <span className="muted small" title="How often the whole flow runs">⏱ Every {flow.intervalMinutes} min</span>
           {flow.stopOnFailure && <span className="muted small">· Stop on fail</span>}
-          {lastRun?.totalMs != null && <span className="muted small">· {lastRun.totalMs}ms</span>}
+          {lastRun?.totalMs != null && <span className="muted small" title={`${lastRun.totalMs}ms`}>· {formatLatency(lastRun.totalMs)}</span>}
           {detail && (
             <span className="muted small">
               · {detail.steps.length} step{detail.steps.length === 1 ? "" : "s"}
@@ -353,11 +354,16 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
           )}
         </div>
         <div className="flow-actions">
-          <button className="ghost small btn-busy" onClick={() => handleRun()} disabled={running || !hasSteps}>
+          <button
+            className="ghost small btn-busy"
+            onClick={() => handleRun()}
+            disabled={running || !hasSteps}
+            title={running ? "Flow is running — wait for it to finish" : !hasSteps ? "Add at least one step before running this flow" : "Run this flow now (force-refreshes prereqs)"}
+          >
             {running ? (<><Spinner size={11} /><span>Running…</span></>) : "▶ Run now"}
           </button>
           <button className="ghost small" onClick={onEdit}>⚙ Edit</button>
-          <button className="ghost destructive small" onClick={onDelete}>🗑</button>
+          <button className="ghost destructive small" onClick={onDelete} title="Delete this flow" aria-label="Delete flow">🗑</button>
         </div>
       </div>
 
@@ -513,8 +519,8 @@ export function FlowCard({ flow, onEdit, onAddStep, onEditStep, onDelete, onAfte
               <div className="flow-add-step">
                 <button className="ghost small" onClick={onAddStep}>+ Add step</button>
                 {lastRun && !running && (
-                  <span className="muted small">
-                    Last run: {new Date(lastRun.startedAt).toLocaleString()}
+                  <span className="muted small" title={new Date(lastRun.startedAt).toLocaleString()}>
+                    Last run: {formatRelative(lastRun.startedAt)}
                   </span>
                 )}
               </div>
@@ -914,7 +920,7 @@ function StepRow(props: {
               </span>
             )}
             {!isLoopStep && result.timings.totalMs != null && (
-              <span className="meta-chip">⏱ {result.timings.totalMs}ms</span>
+              <span className="meta-chip" title={`${result.timings.totalMs}ms`}>⏱ {formatLatency(result.timings.totalMs)}</span>
             )}
             {result.attempts > 1 && (
               <span className="meta-chip warn">🔁 {result.attempts} attempts</span>
@@ -986,7 +992,7 @@ function StepRow(props: {
                     {r.ok ? "✓" : "✗"} {code}
                   </span>
                   {r.timings.totalMs != null && (
-                    <span className="iter-latency muted small">{r.timings.totalMs}ms</span>
+                    <span className="iter-latency muted small" title={`${r.timings.totalMs}ms`}>{formatLatency(r.timings.totalMs)}</span>
                   )}
                   {r.resolvedUrl && <CopyableUrl url={r.resolvedUrl} />}
                   {r.errorReason && (
@@ -1162,7 +1168,7 @@ function IterNodeView(props: {
               {ownRow.ok ? "✓" : "✗"} {ownRow.statusCode ?? (ownRow.errorReason ? "ERR" : "—")}
             </span>
             {ownRow.timings.totalMs != null && (
-              <span className="iter-latency muted small">{ownRow.timings.totalMs}ms</span>
+              <span className="iter-latency muted small" title={`${ownRow.timings.totalMs}ms`}>{formatLatency(ownRow.timings.totalMs)}</span>
             )}
             {ownRow.errorReason && (
               <span className="iter-reason" title={ownRow.errorReason}>

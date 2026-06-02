@@ -80,6 +80,10 @@ DAY_SUMMARIES = {
         "Added a pure Loop step, live loop progress, a 'concat arrays' transform, and the per-item version of it.",
         "Loop = repeat without a fake API call (~88 fewer calls per run). Live loop progress bar. 'Concat arrays' merges two lists. New: 'add a merged-list field to every item' — for each campaign, merge that campaign's countries + regions into one list and Loop it. Dogfooded on the real Logitech flow.",
     ),
+    "2026-06-02": (
+        "Final UX sharpening — small polish all over the dashboard.",
+        "Latencies show as '1.2s' instead of '1234ms'. Timestamps show as '3 min ago' instead of 'Jun 1, 2026, 3:45 PM'. Disabled buttons explain why. A toast appears if the backend connection drops (and another when it comes back). Bundle barely changed — 0.23 KB.",
+    ),
 }
 
 # ---- Task ID -> (plain_task, plain_notes) ----
@@ -680,6 +684,22 @@ TASKS = {
     "22.3.3": ("Rewrote the live Logitech flow to use the new per-item merge (real dogfood).",
                "Step 2 used to derive the locale via 'split text take part 0'; now Step 2 derives 'campaign.geos = countries + regions' per campaign. Step 4 iterates campaign.geos with the new URL format /campaign/{{documentId}}/{{locale}}/{{geo}}/discover. Result: 66/69 calls green; remaining 3 are real backend signal (zh-Hant locale 403s) — exactly what monitoring is for."),
 
+    # ===== 2026-06-02 (final UX sharpening — Phase 1.22.4) =====
+    "22.4.1": ("Built two shared formatters: 'how long' and 'how long ago'.",
+               "One reusable helper file. 'How long' turns 1234ms into 1.2s, 65000ms into 1m 5s. 'How long ago' turns a timestamp into 'just now' / '5 min ago' / '3h ago' / '12d ago'. Used everywhere from now on instead of each component rolling its own."),
+    "22.4.2": ("Replaced raw 'ms' numbers in 9 places across the dashboard.",
+               "Before: '1234ms'. After: '1.2s'. Touched the latency bar, flow cards, prereq panel, KPI cards, activity timeline tooltip, sparkline axis. Each one still shows the exact ms on hover for power users."),
+    "22.4.3": ("Replaced 4 'last run' / 'last check' timestamps with relative time.",
+               "Before: 'Jun 1, 2026, 3:45:22 PM'. After: '3 min ago'. Hover shows the full timestamp. Also deleted two near-duplicate helpers that two components had each written separately — single source of truth now."),
+    "22.4.4": ("Disabled buttons now explain WHY they're disabled.",
+               "Before: hover a greyed 'Run now' button — no clue why it won't fire. After: tooltip says exactly why ('Add a step first' vs 'Flow is already running' vs 'Add a URL first'). Also added a proper screen-reader label to the bare-emoji 🗑 delete button (was being read as just 'wastebasket')."),
+    "22.4.5": ("Dashboard now tells you when the backend connection drops.",
+               "Before: if the backend crashed, the page just froze on old data — no warning. After: one toast on disconnect ('Lost connection to the backend — showing stale data until it returns') and one toast when it comes back ('Reconnected to the server'). Won't spam — only fires on the change."),
+    "22.4.6": ("Verified that the loop progress bar styling was already fine.",
+               "The audit flagged it as missing — but the CSS was already there at line 3791. No change needed; logged for honesty so the missing diff isn't confused for a missed item."),
+    "22.4.7": ("Clean build — bundle barely changed.",
+               "Frontend tsc + vite build both zero errors. Bundle: 361.27 KB JS (+0.23 KB from before), CSS unchanged. Tiny cost for measurable feel improvement."),
+
     # ===== Pending (no date — kept for completeness) =====
     "7.6": ("Pending: get a Slack bot token (xoxb-) and paste it in Settings.",
             "Enables the Slack file upload feature."),
@@ -735,6 +755,7 @@ DATE_TASKS = {
                    "22.1.1", "22.1.2", "22.1.3",
                    "22.2.1", "22.2.2", "22.2.3", "22.2.4", "22.2.5", "22.2.6", "22.2.7",
                    "22.3.1", "22.3.2", "22.3.3"],
+    "2026-06-02": ["22.4.1", "22.4.2", "22.4.3", "22.4.4", "22.4.5", "22.4.6", "22.4.7"],
 }
 
 PENDING_IDS = ["7.6", "9.5"]
