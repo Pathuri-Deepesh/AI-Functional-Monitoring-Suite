@@ -30,8 +30,8 @@ export interface Project {
   name: string;
   description: string;
   slackWebhookUrl: string;
-  slackBotToken: string;
-  slackChannel: string;
+  /** Comma/semicolon/newline-separated email recipients for failure + audit notifications. */
+  notificationEmails: string;
   apiKeys: ApiKey[];
   prereqIntervalMinutes: number;
   prereqEnabled: boolean;

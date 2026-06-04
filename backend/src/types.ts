@@ -39,8 +39,8 @@ export interface Project {
   name: string;
   description: string;
   slackWebhookUrl: string;
-  slackBotToken: string;
-  slackChannel: string;
+  /** Comma/semicolon/newline-separated email recipients for failure + audit notifications. */
+  notificationEmails: string;
   apiKeys: ApiKey[];
   /** Interval (minutes) at which the prereq chain auto-runs. 0 = disabled (manual only). */
   prereqIntervalMinutes: number;

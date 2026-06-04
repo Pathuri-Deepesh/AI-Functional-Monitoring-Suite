@@ -697,14 +697,15 @@ export function ApiKeyManagerForm(props: BaseProps & { project: Project }) {
 }
 
 // =============================================================
-// Settings (project + Slack webhook + Slack bot token)
+// Settings (project + Slack webhook + email notifications)
 // =============================================================
 export function SettingsForm(props: BaseProps & { project: Project }) {
   const [name, setName] = useState(props.project.name);
   const [description, setDescription] = useState(props.project.description);
   const [slackWebhook, setSlackWebhook] = useState(props.project.slackWebhookUrl);
-  const [slackBotToken, setSlackBotToken] = useState(props.project.slackBotToken);
-  const [slackChannel, setSlackChannel] = useState(props.project.slackChannel);
+  const [notificationEmails, setNotificationEmails] = useState(
+    props.project.notificationEmails
+  );
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -712,8 +713,7 @@ export function SettingsForm(props: BaseProps & { project: Project }) {
     setName(props.project.name);
     setDescription(props.project.description);
     setSlackWebhook(props.project.slackWebhookUrl);
-    setSlackBotToken(props.project.slackBotToken);
-    setSlackChannel(props.project.slackChannel);
+    setNotificationEmails(props.project.notificationEmails);
   }, [props.project.id]);
 
   async function save(e: React.FormEvent) {
@@ -725,8 +725,7 @@ export function SettingsForm(props: BaseProps & { project: Project }) {
         name: name.trim(),
         description: description.trim(),
         slackWebhookUrl: slackWebhook.trim(),
-        slackBotToken: slackBotToken.trim(),
-        slackChannel: slackChannel.trim(),
+        notificationEmails: notificationEmails.trim(),
       });
       await props.onDone("Settings saved");
     } catch (e) {
@@ -749,7 +748,7 @@ export function SettingsForm(props: BaseProps & { project: Project }) {
       <h4 className="section-h">Slack — failure alerts (webhook)</h4>
       <Field
         label="Slack webhook URL"
-        hint="Used for instant single-URL failure alerts. Leave empty to disable."
+        hint="Used for instant single-URL failure alerts + audit summaries. Leave empty to disable."
       >
         <input
           type="text"
@@ -759,24 +758,16 @@ export function SettingsForm(props: BaseProps & { project: Project }) {
         />
       </Field>
 
-      <h4 className="section-h">Slack — audit reports (bot token)</h4>
+      <h4 className="section-h">📧 Email notifications</h4>
       <Field
-        label="Slack bot token (xoxb-...)"
-        hint="Used by Run Audit to post rich Block Kit summaries + upload the HTML report. Optional."
+        label="Recipient emails"
+        hint="Comma, semicolon, or newline separated. Sends on URL/flow failures + Snapshot/Report button. SMTP must be configured in backend .env."
       >
-        <input
-          type="password"
-          placeholder="xoxb-..."
-          value={slackBotToken}
-          onChange={(e) => setSlackBotToken(e.target.value)}
-        />
-      </Field>
-      <Field label="Slack channel" hint="Where the audit message + file go (e.g. #monitoring)">
-        <input
-          type="text"
-          placeholder="#monitoring"
-          value={slackChannel}
-          onChange={(e) => setSlackChannel(e.target.value)}
+        <textarea
+          rows={3}
+          placeholder="alice@example.com, bob@example.com"
+          value={notificationEmails}
+          onChange={(e) => setNotificationEmails(e.target.value)}
         />
       </Field>
 

@@ -37,8 +37,7 @@ interface ProjectRow {
   name: string;
   description: string;
   slack_webhook_url: string;
-  slack_bot_token: string;
-  slack_channel: string;
+  notification_emails: string;
   prereq_interval_minutes: number;
   prereq_enabled: number;
   prereq_last_run_at: number | null;
@@ -117,8 +116,7 @@ function rowToProject(r: ProjectRow): Project {
     name: r.name,
     description: r.description,
     slackWebhookUrl: r.slack_webhook_url,
-    slackBotToken: r.slack_bot_token,
-    slackChannel: r.slack_channel,
+    notificationEmails: r.notification_emails ?? "",
     apiKeys: keys.map(rowToApiKey),
     prereqIntervalMinutes: r.prereq_interval_minutes ?? 30,
     prereqEnabled: (r.prereq_enabled ?? 1) === 1,
@@ -201,23 +199,24 @@ export function createProject(input: {
   name: string;
   description?: string;
   slackWebhookUrl?: string;
-  slackBotToken?: string;
-  slackChannel?: string;
+  notificationEmails?: string;
 }): Project {
   const id = randomUUID();
   const createdAt = new Date().toISOString();
+  // Legacy slack_bot_token / slack_channel columns remain in the schema (Phase 1.25
+  // kept them dormant rather than running a destructive table rebuild). Their
+  // DEFAULT '' covers this INSERT which omits them.
   db()
     .prepare(
-      `INSERT INTO projects (id, name, description, slack_webhook_url, slack_bot_token, slack_channel, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO projects (id, name, description, slack_webhook_url, notification_emails, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
       input.name.trim() || "Untitled project",
       input.description?.trim() ?? "",
       input.slackWebhookUrl?.trim() ?? "",
-      input.slackBotToken?.trim() ?? "",
-      input.slackChannel?.trim() ?? "",
+      input.notificationEmails?.trim() ?? "",
       createdAt
     );
   return getProject(id)!;
@@ -231,8 +230,7 @@ export function updateProject(
       | "name"
       | "description"
       | "slackWebhookUrl"
-      | "slackBotToken"
-      | "slackChannel"
+      | "notificationEmails"
       | "prereqIntervalMinutes"
       | "prereqEnabled"
     >
@@ -243,7 +241,7 @@ export function updateProject(
   db()
     .prepare(
       `UPDATE projects
-       SET name = ?, description = ?, slack_webhook_url = ?, slack_bot_token = ?, slack_channel = ?,
+       SET name = ?, description = ?, slack_webhook_url = ?, notification_emails = ?,
            prereq_interval_minutes = ?, prereq_enabled = ?
        WHERE id = ?`
     )
@@ -251,8 +249,7 @@ export function updateProject(
       patch.name ?? existing.name,
       patch.description ?? existing.description,
       patch.slackWebhookUrl ?? existing.slackWebhookUrl,
-      patch.slackBotToken ?? existing.slackBotToken,
-      patch.slackChannel ?? existing.slackChannel,
+      patch.notificationEmails ?? existing.notificationEmails,
       Math.max(1, Math.min(60 * 24, Number(patch.prereqIntervalMinutes ?? existing.prereqIntervalMinutes))),
       (patch.prereqEnabled ?? existing.prereqEnabled) ? 1 : 0,
       id

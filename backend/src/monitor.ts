@@ -1,5 +1,6 @@
 import { reasonForError, reasonForStatus } from "./errorReason.js";
 import { sendSlackAlert } from "./slack.js";
+import { sendUrlFailureEmail } from "./email.js";
 import { evaluateAssertions } from "./assertions.js";
 import {
   getProject,
@@ -106,10 +107,17 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   if (!updated) return undefined;
   updated.lastAssertionResults = assertionResults;
 
-  // Slack: alert on transition into failing state
+  // Notifications: alert on transition into failing state. Slack + email fire
+  // in parallel via Promise.allSettled so one channel's failure can't suppress
+  // the other. Each sender has its own internal "is configured" gate.
   const isFailingNow = !ok;
-  if (isFailingNow && !wasFailing && project?.slackWebhookUrl) {
-    void sendSlackAlert(project.slackWebhookUrl, project, updated);
+  if (isFailingNow && !wasFailing && project) {
+    void Promise.allSettled([
+      project.slackWebhookUrl
+        ? sendSlackAlert(project.slackWebhookUrl, project, updated)
+        : Promise.resolve(),
+      sendUrlFailureEmail(project, updated),
+    ]);
   }
 
   return updated;

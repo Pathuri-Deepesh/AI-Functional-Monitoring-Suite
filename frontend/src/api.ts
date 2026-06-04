@@ -45,8 +45,7 @@ export async function createProject(input: {
   name: string;
   description?: string;
   slackWebhookUrl?: string;
-  slackBotToken?: string;
-  slackChannel?: string;
+  notificationEmails?: string;
 }): Promise<Project> {
   return jsonOrThrow(
     await fetch(`${BASE}/projects`, {
@@ -65,8 +64,7 @@ export async function updateProject(
       | "name"
       | "description"
       | "slackWebhookUrl"
-      | "slackBotToken"
-      | "slackChannel"
+      | "notificationEmails"
       | "prereqIntervalMinutes"
       | "prereqEnabled"
     >

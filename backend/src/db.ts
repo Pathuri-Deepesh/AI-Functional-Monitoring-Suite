@@ -324,6 +324,12 @@ function initSchema(d: DatabaseSync): void {
   // of the most recent preceding level-(N-1) step. Defaults to 1 so every
   // existing row continues to render as a top-level step until backfill runs.
   ensureColumn(d, "flow_steps", "level", "level INTEGER NOT NULL DEFAULT 1");
+
+  // Phase 1.25 — Email notifications. Project-level recipients (comma/semicolon
+  // separated). Empty string = email disabled for this project. The legacy
+  // slack_bot_token / slack_channel columns remain in the schema but are no
+  // longer read or written; left dormant to avoid a destructive table rebuild.
+  ensureColumn(d, "projects", "notification_emails", "notification_emails TEXT NOT NULL DEFAULT ''");
 }
 
 function migrateFromJsonIfNeeded(d: DatabaseSync): void {

@@ -239,6 +239,23 @@ User's ask, verbatim: *"yeah it worked, final work for today, do it ill but prem
 
 **Honest doubt-clearing moment with the user:** they asked *"while implementing we need for each, but for concatinating 2 arrays, n adding that to new field, that too for a specific campaign y not, how doesnt it working without for loop?"*. Explained that `mapAddField` IS a loop — the word "map" already means "apply to every element". Two kinds of for-each in the tool now: step-level (for HTTP, where each iteration is a monitored event with its own status/latency/chip) vs compute-level mapAddField (data shaping where the iteration is internal plumbing, one chip for the whole transform). Rule of thumb: see "map" in a transform name → it's already a loop, don't wrap it.
 
+## Phase 1.25 — Email notifications + Slack bot-token removal ✅ Complete
+
+User's verbatim ask: *"a new task came get back to sr dev mode, 1. remove the slack bot token related everythng, slack webhook url is fine as we built 2.build a email same as slack, when we get 4xx, 5xx n also when we click snapshot n report button it shd send email to the emails we specify"*.
+
+The bot-token + channel pair was friction with no upside for this project (admin approval, per-channel install, two extra password fields in the settings modal). The webhook already covered every alert we cared about. Stripping it means one fewer thing for a new project owner to misconfigure. In parallel, email gained full webhook parity: same three trigger sites (URL 4xx/5xx transition, flow failure, manual Snapshot/Report), with the Snapshot case attaching the generated HTML report as an `.html` file. Channels are independent — a project can run email-only, Slack-only, both, or neither.
+
+- [x] **25.1** Drop `@slack/web-api` dep; add `nodemailer` + `@types/nodemailer` — *2026-06-04*
+- [x] **25.2** New `backend/src/email.ts` mirroring `slack.ts` shape: `sendUrlFailureEmail`, `sendFlowFailureEmail`, `sendAuditEmail` + lazy SMTP transport singleton + `parseRecipients` helper — *2026-06-04*
+- [x] **25.3** `Project.notificationEmails` column added via `ensureColumn` (additive migration; legacy `slack_bot_token` / `slack_channel` columns left dormant). Backend `types.ts` + `store.ts` row mapper + create + update updated — *2026-06-04*
+- [x] **25.4** `slack.ts` collapsed to webhook-only: removed `WebClient` import, `sendAuditViaBot`, and the bot-token branch in `sendAuditToSlack` — *2026-06-04*
+- [x] **25.5** Parallel email triggers wired via `Promise.allSettled` in [monitor.ts](backend/src/monitor.ts), [flowRunner.ts](backend/src/flowRunner.ts), [audit.ts](backend/src/audit.ts) — one channel's failure can't suppress the other; `AuditResult` now exposes both `slack` and `email` delivery statuses — *2026-06-04*
+- [x] **25.6** `backend/.env.example` added (SMTP_HOST/PORT/USER/PASS/FROM template, Gmail SMTP defaults with app-password instructions) — *2026-06-04*
+- [x] **25.7** Frontend mirrors: `Project.notificationEmails` in [types.ts](frontend/src/types.ts) + [api.ts](frontend/src/api.ts); SettingsForm swaps two Slack-bot inputs for one email textarea; project hero replaces the tri-state Slack chip with two independent chips ("🔔 Slack on" + "📧 Email on", muted "🔕 Notifications off" only when both are empty) — *2026-06-04*
+- [x] **25.8** Smoke test: backend tsc + frontend tsc both zero errors; `/api/projects` returns `notificationEmails` and no longer returns `slackBotToken`/`slackChannel`; PATCH round-trip persists email list; `/api/projects/:id/audit` returns `{ slack, email }` with graceful "SMTP not configured" reason when env is absent; OpenAPI export unaffected — *2026-06-04*
+
+**Design call kept honest:** the dormant `slack_bot_token` / `slack_channel` SQLite columns stay in the schema. Dropping them would need a destructive table rebuild for zero functional gain — they're DEFAULT '', never read, never written. A future cleanup migration can drop them if it ever matters; today's risk/reward says don't bother.
+
 ## Phase 1.24 — Export project to OpenAPI / Swagger spec ✅ Complete
 
 Manager's ask, relayed by user verbatim: *"you tell ai that to export to swagger ai, it knows how to do, then u'll understand later ill give some link soo we test the import part later right after it"*. User confirmed scope: *"1.build the export now like a pro / 2. also flows / 3.later we can buld the import, as of now export is fine, cz its easy"*. Import deferred until manager provides the test link.

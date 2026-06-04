@@ -87,14 +87,14 @@ app.get("/api/projects", (_req, res) => {
 });
 
 app.post("/api/projects", (req, res) => {
-  const { name, description, slackWebhookUrl, slackBotToken, slackChannel } = req.body ?? {};
+  const { name, description, slackWebhookUrl, notificationEmails } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
     return;
   }
   res
     .status(201)
-    .json(createProject({ name, description, slackWebhookUrl, slackBotToken, slackChannel }));
+    .json(createProject({ name, description, slackWebhookUrl, notificationEmails }));
 });
 
 app.get("/api/projects/:id", (req, res) => {

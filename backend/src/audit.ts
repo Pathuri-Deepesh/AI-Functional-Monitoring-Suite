@@ -11,6 +11,7 @@ import {
 } from "./store.js";
 import { renderReportHtml } from "./report.js";
 import { sendAuditToSlack } from "./slack.js";
+import { sendAuditEmail } from "./email.js";
 import type { Flow, FlowRun, UrlStats } from "./types.js";
 
 export interface AuditResult {
@@ -28,6 +29,8 @@ export interface AuditResult {
   okFlows: number;
   // Slack
   slack: { posted: boolean; reason?: string };
+  // Email
+  email: { sent: boolean; reason?: string };
 }
 
 /**
@@ -80,8 +83,8 @@ export async function runAuditAndDeliver(
   const okFlows = flowSummaries.filter((s) => s.latestRun?.ok === true).length;
   const totalFlows = flowSummaries.length;
 
-  // Slack delivery
-  const slack = await sendAuditToSlack({
+  // Slack + Email delivery (parallel; each channel has its own internal gate)
+  const deliveryArgs = {
     project,
     urls,
     stats,
@@ -93,7 +96,19 @@ export async function runAuditAndDeliver(
     reportUrl,
     reportPath,
     reportFilename: filename,
-  });
+  };
+  const [slackSettled, emailSettled] = await Promise.allSettled([
+    sendAuditToSlack(deliveryArgs),
+    sendAuditEmail(deliveryArgs),
+  ]);
+  const slack =
+    slackSettled.status === "fulfilled"
+      ? slackSettled.value
+      : { posted: false, reason: String(slackSettled.reason) };
+  const email =
+    emailSettled.status === "fulfilled"
+      ? emailSettled.value
+      : { sent: false, reason: String(emailSettled.reason) };
 
   return {
     projectId,
@@ -107,6 +122,7 @@ export async function runAuditAndDeliver(
     failingFlows,
     okFlows,
     slack,
+    email,
   };
 }
 

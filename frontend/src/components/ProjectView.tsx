@@ -389,12 +389,14 @@ export function ProjectView(props: Props) {
             <span className="meta-chip">
               {project.apiKeys.length} API key{project.apiKeys.length === 1 ? "" : "s"}
             </span>
-            {(project.slackBotToken && project.slackChannel) ? (
-              <span className="meta-chip success">📊 Audit posts to {project.slackChannel}</span>
-            ) : project.slackWebhookUrl ? (
-              <span className="meta-chip success">🔔 Slack alerts on (webhook)</span>
-            ) : (
-              <span className="meta-chip muted">🔕 Slack off</span>
+            {project.slackWebhookUrl && (
+              <span className="meta-chip success">🔔 Slack on</span>
+            )}
+            {project.notificationEmails.trim() && (
+              <span className="meta-chip success">📧 Email on</span>
+            )}
+            {!project.slackWebhookUrl && !project.notificationEmails.trim() && (
+              <span className="meta-chip muted">🔕 Notifications off</span>
             )}
           </div>
         </div>

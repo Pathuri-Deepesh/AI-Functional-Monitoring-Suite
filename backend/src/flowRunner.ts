@@ -22,6 +22,7 @@ import {
 } from "./store.js";
 import { timedFetch } from "./timing.js";
 import { sendFlowFailureAlert } from "./slack.js";
+import { sendFlowFailureEmail } from "./email.js";
 import type {
   ExtractedValue,
   Flow,
@@ -806,7 +807,12 @@ async function executeRun(
   if (!allOk && project) {
     const run = getFlowRun(runId);
     if (run) {
-      void sendFlowFailureAlert(flow as Flow, run, project);
+      const failedStep =
+        flow.steps.find((s) => s.id === run.failedAtStepId) ?? null;
+      void Promise.allSettled([
+        sendFlowFailureAlert(flow as Flow, run, project),
+        sendFlowFailureEmail(flow as Flow, run, project, failedStep),
+      ]);
     }
   }
 
