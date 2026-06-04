@@ -275,6 +275,8 @@ export async function addFlowStep(
     retryBackoffMs?: number;
     stepType?: "http" | "compute" | "loop";
     compute?: ComputeConfig | null;
+    /** Phase 1.23 — 1..4 nesting level. Defaults to 1 on the server. */
+    level?: number;
   }
 ): Promise<FlowStep> {
   return jsonOrThrow(

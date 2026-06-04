@@ -319,6 +319,11 @@ function initSchema(d: DatabaseSync): void {
   ensureColumn(d, "flow_steps", "compute_config_json", "compute_config_json TEXT");
   ensureColumn(d, "prereq_steps", "step_type", "step_type TEXT NOT NULL DEFAULT 'http'");
   ensureColumn(d, "prereq_steps", "compute_config_json", "compute_config_json TEXT");
+
+  // Phase 1.23 — Explicit step nesting level (1..4). Level-N step is a child
+  // of the most recent preceding level-(N-1) step. Defaults to 1 so every
+  // existing row continues to render as a top-level step until backfill runs.
+  ensureColumn(d, "flow_steps", "level", "level INTEGER NOT NULL DEFAULT 1");
 }
 
 function migrateFromJsonIfNeeded(d: DatabaseSync): void {

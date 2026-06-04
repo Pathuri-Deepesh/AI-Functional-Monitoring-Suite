@@ -608,6 +608,7 @@ interface FlowStepRow {
   for_each_config_json: string | null;
   step_type: string | null;
   compute_config_json: string | null;
+  level: number | null;
 }
 
 interface FlowRunRow {
@@ -691,6 +692,7 @@ function rowToFlowStep(r: FlowStepRow): FlowStep {
     compute: r.compute_config_json
       ? safeParse<ComputeConfig | null>(r.compute_config_json, null)
       : null,
+    level: typeof r.level === "number" && r.level >= 1 && r.level <= 4 ? r.level : 1,
   };
 }
 
@@ -886,21 +888,22 @@ function normalizeForEach(raw: unknown): ForEachConfig | null {
 }
 
 /**
- * Load the (id, position, forEach) tuples for every step in a flow. Used by
- * assertForEachDepth to validate a proposed change without re-fetching the
- * full FlowStep rows.
+ * Load the (id, position, forEach, level) tuples for every step in a flow. Used by
+ * assertForEachDepth and assertLevelChain to validate a proposed change without
+ * re-fetching the full FlowStep rows.
  */
 function loadStepsForDepthCheck(
   flowId: string
-): Array<{ id: string; position: number; forEach: ForEachConfig | null }> {
+): Array<{ id: string; position: number; forEach: ForEachConfig | null; level: number }> {
   const rows = db()
     .prepare(
-      "SELECT id, position, for_each_config_json FROM flow_steps WHERE flow_id = ? ORDER BY position"
+      "SELECT id, position, for_each_config_json, level FROM flow_steps WHERE flow_id = ? ORDER BY position"
     )
     .all(flowId) as Array<{
       id: string;
       position: number;
       for_each_config_json: string | null;
+      level: number | null;
     }>;
   return rows.map((r) => ({
     id: r.id,
@@ -908,7 +911,38 @@ function loadStepsForDepthCheck(
     forEach: r.for_each_config_json
       ? (safeParse<ForEachConfig | null>(r.for_each_config_json, null))
       : null,
+    level: typeof r.level === "number" && r.level >= 1 && r.level <= 4 ? r.level : 1,
   }));
+}
+
+/**
+ * Phase 1.23 — level chain validator. Walks steps in position order and
+ * ensures every level-N step has a preceding level-(N-1) step. Throws on the
+ * first orphan with a message naming the offending position.
+ *
+ * Examples (valid):  [L1, L1, L2, L2, L1]
+ * Examples (invalid):
+ *   [L1, L3]                — L3 with no L2 above it
+ *   [L1, L2, L1, L2]        — second L2 sees L1 reset its chain; that L2's
+ *                              parent is the *prior* L1 — fine, allowed.
+ *   [L2, L1]                — first row is L2 with no parent above
+ */
+export function assertLevelChain(
+  steps: Array<{ id: string; position: number; level: number }>
+): void {
+  const sorted = [...steps].sort((a, b) => a.position - b.position);
+  // lastAt[1..4] = whether a step exists at that level in the current chain
+  const lastAt: boolean[] = [false, false, false, false, false];
+  for (const s of sorted) {
+    const lvl = s.level >= 1 && s.level <= 4 ? s.level : 1;
+    if (lvl > 1 && !lastAt[lvl - 1]) {
+      throw new Error(
+        `Step at position ${s.position} has level ${lvl} but no level-${lvl - 1} parent before it`
+      );
+    }
+    lastAt[lvl] = true;
+    for (let j = lvl + 1; j <= 4; j++) lastAt[j] = false;
+  }
 }
 
 /**
@@ -967,6 +1001,8 @@ export function addFlowStep(input: {
   forEach?: ForEachConfig | null;
   stepType?: "http" | "compute" | "loop";
   compute?: ComputeConfig | null;
+  /** Phase 1.23 — nesting level 1..4. Defaults to 1 (top-level). */
+  level?: number;
 }): FlowStep {
   const flow = getFlow(input.flowId);
   if (!flow) throw new Error("Flow not found");
@@ -1012,11 +1048,21 @@ export function addFlowStep(input: {
     .get(input.flowId) as { m: number | null };
   const nextPos = (maxRow.m ?? 0) + 1;
 
+  // Phase 1.23 — clamp level to [1, 4]; default to 1.
+  const level = Math.max(1, Math.min(4, Math.floor(Number(input.level ?? 1))));
+
   // Phase 1.19 — validate nesting depth on the proposed post-add step list
   if (forEach) {
     const proposed = loadStepsForDepthCheck(input.flowId);
-    proposed.push({ id: "__new__", position: nextPos, forEach });
+    proposed.push({ id: "__new__", position: nextPos, forEach, level });
     assertForEachDepth(proposed);
+  }
+
+  // Phase 1.23 — validate level chain on the proposed post-add step list
+  if (level > 1) {
+    const proposed = loadStepsForDepthCheck(input.flowId);
+    proposed.push({ id: "__new__", position: nextPos, forEach, level });
+    assertLevelChain(proposed);
   }
 
   const id = randomUUID();
@@ -1025,8 +1071,8 @@ export function addFlowStep(input: {
       `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                api_key_id, assertions_json, custom_headers_json, query_params_json,
                                extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json,
-                               step_type, compute_config_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                               step_type, compute_config_json, level)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -1048,7 +1094,8 @@ export function addFlowStep(input: {
       Math.max(100, Math.min(30_000, Number(input.retryBackoffMs ?? 1000))),
       forEach ? JSON.stringify(forEach) : null,
       isCompute ? "compute" : isLoop ? "loop" : "http",
-      isCompute ? JSON.stringify(input.compute) : null
+      isCompute ? JSON.stringify(input.compute) : null,
+      level
     );
   return getFlowStep(id)!;
 }
@@ -1072,6 +1119,8 @@ export function updateFlowStep(
     retryBackoffMs: number;
     forEach: ForEachConfig | null;
     compute: ComputeConfig | null;
+    /** Phase 1.23 — nesting level (1..4). */
+    level: number;
   }>
 ): FlowStep | undefined {
   const existing = getFlowStep(id);
@@ -1097,12 +1146,26 @@ export function updateFlowStep(
     throw new Error("Loop step requires both 'iterate over' (arrayVarName) and 'as' (itemVarName)");
   }
 
+  // Phase 1.23 — level can be patched. Clamp + validate the resulting chain.
+  const levelProvided = Object.prototype.hasOwnProperty.call(patch, "level");
+  const nextLevel = levelProvided
+    ? Math.max(1, Math.min(4, Math.floor(Number(patch.level ?? 1))))
+    : existing.level;
+
   // Phase 1.19 — validate nesting depth on the proposed post-update step list
   if (forEachProvided && !isCompute) {
     const proposed = loadStepsForDepthCheck(existing.flowId);
     const idx = proposed.findIndex((s) => s.id === id);
-    if (idx >= 0) proposed[idx] = { ...proposed[idx], forEach: nextForEach };
+    if (idx >= 0) proposed[idx] = { ...proposed[idx], forEach: nextForEach, level: nextLevel };
     assertForEachDepth(proposed);
+  }
+
+  // Phase 1.23 — validate the level chain remains coherent after this edit
+  if (levelProvided) {
+    const proposed = loadStepsForDepthCheck(existing.flowId);
+    const idx = proposed.findIndex((s) => s.id === id);
+    if (idx >= 0) proposed[idx] = { ...proposed[idx], level: nextLevel };
+    assertLevelChain(proposed);
   }
 
   const computeProvided = Object.prototype.hasOwnProperty.call(patch, "compute");
@@ -1119,7 +1182,7 @@ export function updateFlowStep(
        SET description = ?, url = ?, method = ?, body_type = ?, body = ?, body_content_type = ?,
            api_key_id = ?, assertions_json = ?, custom_headers_json = ?, query_params_json = ?,
            extractions_json = ?, wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?,
-           for_each_config_json = ?, compute_config_json = ?
+           for_each_config_json = ?, compute_config_json = ?, level = ?
        WHERE id = ?`
     )
     .run(
@@ -1139,6 +1202,7 @@ export function updateFlowStep(
       Math.max(100, Math.min(30_000, Number(patch.retryBackoffMs ?? existing.retryBackoffMs))),
       nextForEach ? JSON.stringify(nextForEach) : null,
       isCompute && nextCompute ? JSON.stringify(nextCompute) : null,
+      nextLevel,
       id
     );
   return getFlowStep(id);
@@ -1147,6 +1211,18 @@ export function updateFlowStep(
 export function deleteFlowStep(id: string): boolean {
   const existing = getFlowStep(id);
   if (!existing) return false;
+  // Phase 1.23 — block deletion if it would orphan child steps (level > 1
+  // steps whose parent at level-1 disappears). User must promote/delete
+  // children first.
+  const proposed = loadStepsForDepthCheck(existing.flowId).filter((s) => s.id !== id);
+  try {
+    assertLevelChain(proposed);
+  } catch (e: any) {
+    throw new Error(
+      `Cannot delete step at position ${existing.position}: it would orphan a child step. ` +
+        `Promote or delete the children first. (${e.message})`
+    );
+  }
   tx(() => {
     db().prepare("DELETE FROM flow_steps WHERE id = ?").run(id);
     db()
@@ -1157,6 +1233,19 @@ export function deleteFlowStep(id: string): boolean {
 }
 
 export function reorderFlowSteps(flowId: string, orderedIds: string[]): void {
+  // Phase 1.23 — validate that the new ordering keeps every level-N step's
+  // level-(N-1) parent above it. Reject the reorder if it produces orphans.
+  const current = loadStepsForDepthCheck(flowId);
+  const byId = new Map(current.map((s) => [s.id, s]));
+  const proposed = orderedIds.map((stepId, idx) => {
+    const row = byId.get(stepId);
+    if (!row) throw new Error(`Step ${stepId} not in flow`);
+    return { ...row, position: idx + 1 };
+  });
+  assertLevelChain(proposed);
+  // Also re-validate for-each depth — same chain may now be invalid.
+  assertForEachDepth(proposed);
+
   tx(() => {
     orderedIds.forEach((stepId, idx) => {
       db()
@@ -1182,8 +1271,8 @@ function insertStepCopyAtTop(targetFlowId: string, source: FlowStep): FlowStep {
         `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                  api_key_id, assertions_json, custom_headers_json, query_params_json,
                                  extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json,
-                                 step_type, compute_config_json)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                 step_type, compute_config_json, level)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         newId,
@@ -1204,7 +1293,9 @@ function insertStepCopyAtTop(targetFlowId: string, source: FlowStep): FlowStep {
         source.retryBackoffMs,
         source.forEach ? JSON.stringify(source.forEach) : null,
         source.stepType ?? "http",
-        source.compute ? JSON.stringify(source.compute) : null
+        source.compute ? JSON.stringify(source.compute) : null,
+        // Copied step always lands at position 1 → must be level 1.
+        1
       );
   });
   return getFlowStep(newId)!;
@@ -1221,7 +1312,8 @@ export function copyFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
       ...s,
       position: s.position + 1,
     }));
-    proposed.unshift({ id: "__new__", position: 1, forEach: source.forEach });
+    // Copied step always lands at position 1 → level=1 for the validator's perspective.
+    proposed.unshift({ id: "__new__", position: 1, forEach: source.forEach, level: 1 });
     assertForEachDepth(proposed);
   }
   return insertStepCopyAtTop(targetFlowId, source);
@@ -1241,7 +1333,8 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
       ...s,
       position: s.position + 1,
     }));
-    proposed.unshift({ id: "__new__", position: 1, forEach: source.forEach });
+    // Copied step always lands at position 1 → level=1 for the validator's perspective.
+    proposed.unshift({ id: "__new__", position: 1, forEach: source.forEach, level: 1 });
     assertForEachDepth(proposed);
   }
 
@@ -1259,8 +1352,8 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
         `INSERT INTO flow_steps (id, flow_id, position, description, url, method, body_type, body, body_content_type,
                                  api_key_id, assertions_json, custom_headers_json, query_params_json,
                                  extractions_json, wait_before_ms, max_retries, retry_backoff_ms, for_each_config_json,
-                                 step_type, compute_config_json)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                                 step_type, compute_config_json, level)
+         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         newId,
@@ -1281,7 +1374,9 @@ export function moveFlowStepToFlow(stepId: string, targetFlowId: string): FlowSt
         source.retryBackoffMs,
         source.forEach ? JSON.stringify(source.forEach) : null,
         source.stepType ?? "http",
-        source.compute ? JSON.stringify(source.compute) : null
+        source.compute ? JSON.stringify(source.compute) : null,
+        // Moved step always lands at position 1 → must be level 1.
+        1
       );
     // Delete source + rebalance source flow so positions stay contiguous
     db().prepare("DELETE FROM flow_steps WHERE id = ?").run(stepId);

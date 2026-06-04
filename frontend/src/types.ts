@@ -224,6 +224,12 @@ export interface FlowStep {
   stepType?: StepType;
   /** Phase 1.21 — populated only when stepType === "compute". */
   compute?: ComputeConfig | null;
+  /**
+   * Phase 1.23 — explicit nesting level 1..4. A level-N step renders and
+   * executes as a child of the most-recent preceding level-(N-1) step.
+   * Defaults to 1 (top-level) for pre-1.23 rows.
+   */
+  level: number;
 }
 
 /** Phase 1.21 — sample-vars endpoint response feeding the URL preview panel. */

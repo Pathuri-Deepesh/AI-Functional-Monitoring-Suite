@@ -200,6 +200,9 @@ export function StepEditorForm(
   const [computeRows, setComputeRows] = useState<ComputeRow[]>(
     step?.compute?.computations ?? []
   );
+  // Phase 1.23 — explicit nesting level (1..4). A level-N step is a child of
+  // the most-recent preceding level-(N-1) step. Defaults to 1 (top-level).
+  const [level, setLevel] = useState<number>(step?.level ?? 1);
   const [tab, setTab] = useState<StepTab>("basics");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -269,6 +272,30 @@ export function StepEditorForm(
     return out;
   })();
 
+  // Phase 1.23 — which levels can THIS step pick? L1 always works. L(N>1)
+  // requires at least one level-(N-1) step earlier in the flow (after which no
+  // shallower step has wiped that scope). Mirrors backend `assertLevelChain`.
+  const allowedLevels = useMemo(() => {
+    const earlier = editing
+      ? flow.steps.filter((s) => s.position < step!.position)
+      : flow.steps;
+    const sorted = [...earlier].sort((a, b) => a.position - b.position);
+    const lastAt: boolean[] = [false, false, false, false, false];
+    for (const s of sorted) {
+      const lvl = Math.max(1, Math.min(4, (s as any).level || 1));
+      lastAt[lvl] = true;
+      for (let j = lvl + 1; j <= 4; j++) lastAt[j] = false;
+    }
+    const out: number[] = [1];
+    for (let n = 2; n <= 4; n++) if (lastAt[n - 1]) out.push(n);
+    return out;
+  }, [flow.steps, editing, step]);
+
+  // Snap level down to a valid choice if the user-typed parent disappeared.
+  useEffect(() => {
+    if (!allowedLevels.includes(level)) setLevel(allowedLevels[allowedLevels.length - 1] ?? 1);
+  }, [allowedLevels, level]);
+
   // Phase 1.19 — compute this step's nesting depth (1..4) so the editor can
   // show the right badge and the combinatorial-call estimate.
   const computedForEachDepth = (() => {
@@ -313,6 +340,7 @@ export function StepEditorForm(
           method: "GET" as HttpMethod,
           stepType: "compute" as const,
           compute: { computations: cleaned },
+          level,
         };
         if (editing) {
           await updateFlowStep(step!.id, payload);
@@ -346,6 +374,7 @@ export function StepEditorForm(
             arrayVarName: forEach.arrayVarName.trim(),
             itemVarName: forEach.itemVarName.trim(),
           },
+          level,
         };
         if (editing) {
           await updateFlowStep(step!.id, payload);
@@ -392,6 +421,7 @@ export function StepEditorForm(
                 itemVarName: forEach.itemVarName.trim(),
               }
             : null,
+        level,
       };
       if (editing) {
         await updateFlowStep(step!.id, payload);
@@ -429,6 +459,8 @@ export function StepEditorForm(
       {editing && stepType === "loop" && (
         <div className="step-type-badge --loop">🔁 Loop step</div>
       )}
+      <LevelPicker value={level} allowed={allowedLevels} onChange={setLevel} />
+
 
       {stepType === "compute" ? (
         <ComputeStepBody
@@ -665,6 +697,58 @@ function StepTypePicker(props: {
           <span className="step-type-desc">Iterate over an array — provides scope for nested steps, no HTTP call</span>
         </button>
       )}
+    </div>
+  );
+}
+
+// =============================================================
+// Phase 1.23 — Level pill picker (L1..L4)
+// A level-N step renders and executes as a child of the most-recent preceding
+// level-(N-1) step. Disabled pills tell the user "this would orphan you — add
+// a level-(N-1) step above first."
+// =============================================================
+function LevelPicker(props: {
+  value: number;
+  allowed: number[];
+  onChange: (v: number) => void;
+}) {
+  const { value, allowed, onChange } = props;
+  return (
+    <div className="level-picker">
+      <span className="level-picker-label muted small">Nesting level</span>
+      <div className="level-picker-pills">
+        {[1, 2, 3, 4].map((n) => {
+          const isAllowed = allowed.includes(n);
+          const isActive = value === n;
+          return (
+            <button
+              key={n}
+              type="button"
+              className={`level-pill ${isActive ? "active" : ""} ${!isAllowed ? "disabled" : ""}`}
+              onClick={() => isAllowed && onChange(n)}
+              disabled={!isAllowed}
+              title={
+                isAllowed
+                  ? n === 1
+                    ? "Top-level step"
+                    : `Child of the most-recent L${n - 1} step above`
+                  : `Add a level-${n - 1} step earlier in the flow first`
+              }
+            >
+              L{n}
+            </button>
+          );
+        })}
+      </div>
+      <span className="level-picker-hint muted small">
+        {value === 1
+          ? "Numbered 1, 2, 3… (top-level step)"
+          : value === 2
+          ? "Numbered like 3a, 3b (sibling under its L1 parent)"
+          : value === 3
+          ? "Numbered like 3a.i, 3a.ii (nested under L2)"
+          : "Numbered like 3a.i.1 (deepest nesting)"}
+      </span>
     </div>
   );
 }

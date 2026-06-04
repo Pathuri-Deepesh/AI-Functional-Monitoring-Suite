@@ -61,28 +61,38 @@ const METHOD_COLOR: Record<string, string> = {
 };
 
 /**
- * Phase 1.19 — compute the for-each nesting depth (1..4) of a step given the
- * ordered list of steps that precede it. Mirrors the backend's
- * `assertForEachDepth` + the runner's `computeAbsorbedBlock` walk. Returns 0
- * for non-iterating steps.
+ * Phase 1.23 — compute the user-facing label and level for every step in one
+ * pass. L1 → "1", "2", "3"; L2 children → "3a", "3b"; L3 → "3a.i", "3a.ii";
+ * L4 → "3a.i.1". Counters at deeper levels reset whenever a higher level
+ * advances, so labels reflect "this is the 2nd child of the 3rd top-level step".
  */
-function computeForEachDepth(step: FlowStep, earlier: FlowStep[]): number {
-  if (!step.forEach) return 0;
-  let scopeStack: string[] = [];
-  for (const s of earlier) {
-    if (s.forEach) {
-      const root = s.forEach.arrayVarName.split(".")[0];
-      const idx = scopeStack.indexOf(root);
-      if (idx >= 0) scopeStack = scopeStack.slice(0, idx + 1);
-      else scopeStack = [];
-      scopeStack.push(s.forEach.itemVarName);
-    } else {
-      scopeStack = [];
-    }
+function letter(n: number): string {
+  if (n <= 0) return "";
+  let s = "";
+  while (n > 0) {
+    n--;
+    s = String.fromCharCode(97 + (n % 26)) + s;
+    n = Math.floor(n / 26);
   }
-  const root = step.forEach.arrayVarName.split(".")[0];
-  const idx = scopeStack.indexOf(root);
-  return idx >= 0 ? Math.min(idx + 2, 4) : 1;
+  return s;
+}
+function roman(n: number): string {
+  const vals = ["", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x"];
+  if (n >= 0 && n < vals.length) return vals[n];
+  return String(n);
+}
+function computeStepLabels(steps: FlowStep[]): Array<{ label: string; level: number }> {
+  const counters = [0, 0, 0, 0, 0]; // 1..4 in use
+  return steps.map((s) => {
+    const lvl = Math.max(1, Math.min(4, s.level || 1));
+    counters[lvl]++;
+    for (let j = lvl + 1; j <= 4; j++) counters[j] = 0;
+    let label = String(counters[1]);
+    if (lvl >= 2) label += letter(counters[2]);
+    if (lvl >= 3) label += "." + roman(counters[3]);
+    if (lvl >= 4) label += "." + counters[4];
+    return { label, level: lvl };
+  });
 }
 
 const POLL_MS = 500;
@@ -575,6 +585,7 @@ function SortedStepList(props: {
     [steps]
   );
   const sortedIds = useMemo(() => sorted.map((s) => s.id), [sorted]);
+  const labels = useMemo(() => computeStepLabels(sorted), [sorted]);
   const activeStep = activeDragId
     ? sorted.find((s) => s.id === activeDragId) ?? null
     : null;
@@ -616,7 +627,9 @@ function SortedStepList(props: {
               earlier,
               projectVarNames
             );
-            const forEachDepth = computeForEachDepth(step, earlier);
+            const { label, level } = labels[idx];
+            // For for-each pill display: nesting depth is just the level.
+            const forEachDepth = step.forEach ? level : 0;
             // Phase 1.22 — a Loop step's scope is "active" when the live step
             // sits inside it. Without this, the Loop sits on "QUEUED" the whole
             // time it's actually orchestrating N iterations (the live signal
@@ -649,6 +662,8 @@ function SortedStepList(props: {
                 key={step.id}
                 id={step.id}
                 position={step.position}
+                label={label}
+                level={level}
                 method={step.method}
                 url={step.url}
                 description={step.description}
@@ -691,6 +706,10 @@ function SortedStepList(props: {
 function StepRow(props: {
   id: string;
   position: number;
+  /** Phase 1.23 — user-facing label: "1", "2", "3a", "3a.i", etc. */
+  label: string;
+  /** Phase 1.23 — nesting level 1..4 (drives indentation). */
+  level: number;
   method: string;
   url: string;
   description: string;
@@ -720,6 +739,8 @@ function StepRow(props: {
   const {
     id,
     position,
+    label,
+    level,
     method,
     url,
     description,
@@ -812,6 +833,7 @@ function StepRow(props: {
       : result?.statusCode ?? "OK";
   const rowClass = [
     "step-row",
+    `step-level-${level}`,
     ok === false && !skipped ? "step-failed" : "",
     runState === "running" ? "step-running" : "",
     runState === "running" && isRetry ? "step-retrying" : "",
@@ -821,10 +843,14 @@ function StepRow(props: {
   ]
     .filter(Boolean)
     .join(" ");
+  const rowStyle: React.CSSProperties = {
+    ...sortableStyle,
+    ["--step-level" as any]: String(level),
+  };
   return (
     <div
       ref={setNodeRef}
-      style={sortableStyle}
+      style={rowStyle}
       className={rowClass}
       onClick={onClick}
     >
@@ -839,7 +865,7 @@ function StepRow(props: {
         aria-label={`Reorder step ${position}`}
       >
         <GripIcon />
-        <span className="step-num">{position}</span>
+        <span className="step-num">{label}</span>
       </button>
       <div className="step-main">
         <div className="step-line">

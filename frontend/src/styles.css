@@ -1417,6 +1417,61 @@ input::placeholder { color: var(--muted-2); }
 }
 .step-row.step-queued .step-edit-hint { visibility: hidden; }
 
+/* Phase 1.23 — indent child steps so the L1/L2/L3/L4 hierarchy is visible at
+   a glance. --step-level is set inline on each .step-row (1..4). Children get
+   a subtle dashed guideline on the left edge that points back at their parent. */
+.step-row.step-level-2 { margin-left: 24px; border-left: 1px dashed rgba(34, 211, 238, 0.28); }
+.step-row.step-level-3 { margin-left: 48px; border-left: 1px dashed rgba(34, 211, 238, 0.32); }
+.step-row.step-level-4 { margin-left: 72px; border-left: 1px dashed rgba(34, 211, 238, 0.36); }
+.step-row.step-level-2:hover,
+.step-row.step-level-3:hover,
+.step-row.step-level-4:hover { border-left-color: rgba(34, 211, 238, 0.6); }
+
+/* Phase 1.23 — Level picker (L1..L4 pill row). Lives between StepTypePicker
+   and the per-type body in the step editor. */
+.level-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  margin-bottom: var(--s-3);
+}
+.level-picker-label { font-weight: 600; color: var(--text); }
+.level-picker-pills {
+  display: flex;
+  gap: var(--s-2);
+}
+.level-pill {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--panel-3);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+}
+.level-pill:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.level-pill.active {
+  background: rgba(34, 211, 238, 0.18);
+  border-color: rgba(34, 211, 238, 0.55);
+  color: #67e8f9;
+}
+.level-pill.disabled,
+.level-pill:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.level-picker-hint { font-size: 11px; }
+
 /* Banner shown above the flow progress bar while prereqs are running first.
    Has a live progress fill underneath the text — gives users a visible signal
    that the prereq is actively executing (vs hung). */

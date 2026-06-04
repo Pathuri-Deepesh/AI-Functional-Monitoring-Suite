@@ -258,6 +258,12 @@ export interface FlowStep {
   stepType?: StepType;
   /** Phase 1.21 — populated only when `stepType === "compute"`. */
   compute?: ComputeConfig | null;
+  /**
+   * Phase 1.23 — explicit nesting level (1..4). A level-N step is a child of
+   * the most recent preceding level-(N-1) step within the same flow. Defaults
+   * to 1 (top-level). Children run inside each iteration of their parent loop.
+   */
+  level: number;
 }
 
 export interface Flow {
