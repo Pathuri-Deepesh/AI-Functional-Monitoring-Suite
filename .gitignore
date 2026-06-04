@@ -60,3 +60,9 @@ run*.json
 # Postman CLI scaffolding (local-only, not part of the suite)
 .postman/
 postman/
+
+# Internal tracker artifacts + helper scripts (kept local — excluded from GitLab push)
+.claude_internal/
+project-tracker.xlsx
+PROGRESS.md
+README.md
