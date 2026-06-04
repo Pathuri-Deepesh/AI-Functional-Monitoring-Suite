@@ -64,5 +64,7 @@ postman/
 # Internal tracker artifacts + helper scripts (kept local — excluded from GitLab push)
 .claude_internal/
 project-tracker.xlsx
+project-tracker.csv
 PROGRESS.md
 README.md
+.mcp.json
