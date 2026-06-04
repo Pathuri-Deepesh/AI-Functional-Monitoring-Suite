@@ -85,6 +85,21 @@ export async function deleteProject(id: string): Promise<void> {
   await jsonOrThrow(await fetch(`${BASE}/projects/${id}`, { method: "DELETE" }));
 }
 
+export async function exportProjectOpenAPI(
+  projectId: string,
+  format: "yaml" | "json"
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(`${BASE}/projects/${projectId}/export/openapi?format=${format}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `status ${res.status}`);
+  }
+  const cd = res.headers.get("content-disposition") || "";
+  const m = cd.match(/filename="([^"]+)"/);
+  const filename = m ? m[1] : `openapi.${format}`;
+  return { blob: await res.blob(), filename };
+}
+
 // ---- Keys ----
 export async function addApiKey(
   projectId: string,

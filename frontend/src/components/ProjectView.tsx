@@ -8,6 +8,7 @@ import { Spinner } from "./Spinner";
 import { formatLatency, formatRelative } from "../utils/format";
 import {
   checkAllUrls,
+  exportProjectOpenAPI,
   fetchFlowRun,
   fetchPrereqRun,
   fetchPrereqs,
@@ -104,6 +105,7 @@ export function ProjectView(props: Props) {
     runId: string;
   } | null>(null);
   const fullCheckAbort = useRef<{ cancelled: boolean } | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
   const [tab, setTab] = useState<SectionTab>(readTabFromHash);
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -230,6 +232,27 @@ export function ProjectView(props: Props) {
    *   2. URLs in parallel + flows one-at-a-time. URLs auto-refresh via snapshot
    *      polling; each flow attaches via per-card externalRunId.
    */
+  async function handleExportOpenAPI(format: "yaml" | "json") {
+    if (exportBusy) return;
+    setExportBusy(true);
+    try {
+      const { blob, filename } = await exportProjectOpenAPI(project.id, format);
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(objUrl), 0);
+      props.onToast(`OpenAPI spec downloaded: ${filename}`, "success");
+    } catch (err) {
+      props.onToast(err instanceof Error ? err.message : "Export failed", "error");
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   async function runFullCheckOrchestrator() {
     if (fullCheckBusy) return;
     setFullCheckBusy(true);
@@ -398,6 +421,24 @@ export function ProjectView(props: Props) {
             }
           >
             {props.auditRunning ? "Snapshotting…" : "📊 Snapshot & report"}
+          </button>
+          <button
+            onClick={() => handleExportOpenAPI("yaml")}
+            disabled={exportBusy || (urls.length === 0 && flows.length === 0)}
+            title={
+              urls.length === 0 && flows.length === 0
+                ? "Add at least one URL or flow first"
+                : "Export every URL monitor, flow, and prereq as an OpenAPI 3.0.3 (Swagger) YAML file. Reproduces this project's contract in any Swagger-aware tool (Postman, ReadyAPI, SwaggerHub)."
+            }
+          >
+            {exportBusy ? (
+              <>
+                <Spinner size={11} />
+                <span style={{ marginLeft: 6 }}>Exporting…</span>
+              </>
+            ) : (
+              "📥 Export to Swagger"
+            )}
           </button>
           <button className="ghost" onClick={props.onSettings} title="Project settings">
             ⚙

@@ -1,7 +1,9 @@
 import express from "express";
 import cors from "cors";
+import yaml from "js-yaml";
 import { mkdirSync, createReadStream, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { buildOpenAPISpec } from "./openapiExport.js";
 import {
   addApiKey,
   addFlowStep,
@@ -120,6 +122,38 @@ app.delete("/api/projects/:id", (req, res) => {
     return;
   }
   res.status(204).end();
+});
+
+// ---------- OpenAPI / Swagger export ----------
+app.get("/api/projects/:id/export/openapi", (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  const format: "yaml" | "json" = req.query.format === "json" ? "json" : "yaml";
+  const urls = listUrlsByProject(project.id);
+  const flows = listFlowsByProject(project.id)
+    .map((f) => getFlowWithSteps(f.id))
+    .filter((f): f is NonNullable<typeof f> => Boolean(f));
+  const prereqs = listPrereqSteps(project.id);
+  const spec = buildOpenAPISpec(project, urls, flows, prereqs);
+  const body =
+    format === "yaml"
+      ? yaml.dump(spec, { lineWidth: 120, noRefs: true, sortKeys: false })
+      : JSON.stringify(spec, null, 2);
+  const slug =
+    project.name
+      .replace(/[^a-z0-9-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() || "project";
+  const filename = `${slug}-openapi.${format}`;
+  res.setHeader(
+    "content-type",
+    format === "yaml" ? "application/yaml; charset=utf-8" : "application/json; charset=utf-8",
+  );
+  res.setHeader("content-disposition", `attachment; filename="${filename}"`);
+  res.send(body);
 });
 
 // ---------- API Keys ----------
