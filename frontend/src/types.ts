@@ -88,12 +88,116 @@ export interface MonitoredUrl {
   assertions: Assertion[];
   customHeaders: KeyValue[];
   queryParams: KeyValue[];
+
+  // Phase 1.26 — Swagger import provenance. NULL = manually created.
+  importSource: string | null;
+  importSpecId: string | null;
+
   statusCode: number | null;
   statusGroup: StatusGroup | null;
   errorReason: string | null;
   timings: Timings | null;
   lastChecked: string | null;
   lastAssertionResults: AssertionResult[];
+}
+
+// =============================================================
+// Swagger / OpenAPI import (Phase 1.26)
+// Mirrors backend openapiImport.ts public types.
+// =============================================================
+
+export type ImportDiffStatus = "new" | "unchanged" | "drifted" | "removed";
+
+export interface ImportEndpointPreview {
+  identity: string;
+  method: HttpMethod;
+  pathTemplate: string;
+  fullUrl: string;
+  summary: string;
+  deprecated: boolean;
+  authSchemeId: string | null;
+  status: ImportDiffStatus;
+  existingUrlId?: string;
+  driftReason?: string;
+}
+
+export interface ImportAuthSchemePreview {
+  schemeId: string;
+  type: "http-bearer" | "apiKey-header" | "unsupported";
+  unsupportedKind?: string;
+  headerName?: string;
+  matchedApiKeyId: string | null;
+  matchReason: "name" | "header-tuple" | "none";
+}
+
+export interface ImportFlowPreview {
+  xMonFlowId: string;
+  name: string;
+  stepCount: number;
+  status: ImportDiffStatus;
+  existingFlowId?: string;
+}
+
+export interface ImportPrereqPreview {
+  xMonPrereqId: string;
+  position: number;
+  method: HttpMethod;
+  pathTemplate: string;
+  status: ImportDiffStatus;
+  existingPrereqId?: string;
+}
+
+export interface ImportDiff {
+  endpoints: ImportEndpointPreview[];
+  authSchemes: ImportAuthSchemePreview[];
+  flows: ImportFlowPreview[];
+  prereqs: ImportPrereqPreview[];
+  removed: {
+    urls: Array<{ id: string; url: string; method: HttpMethod; importSource: string | null }>;
+    flows: Array<{ id: string; name: string }>;
+    prereqs: Array<{ id: string; position: number; url: string }>;
+  };
+  warnings: string[];
+}
+
+export interface ImportPreview {
+  diff: ImportDiff;
+  specMeta: {
+    title: string;
+    version: string;
+    specId: string;
+    isRoundTrip: boolean;
+  };
+}
+
+export interface ImportApiKeyCreate {
+  schemeId: string;
+  name: string;
+  headerName: string;
+  headerPrefix: string;
+  value: string;
+}
+
+export interface ImportSelections {
+  endpointIdentities: string[];
+  flowIds: string[];
+  prereqIds: string[];
+  deleteUrlIds: string[];
+  deleteFlowIds: string[];
+  deletePrereqIds: string[];
+  apiKeyCreates: ImportApiKeyCreate[];
+}
+
+export interface ImportResult {
+  createdUrls: number;
+  createdFlows: number;
+  createdPrereqs: number;
+  createdApiKeys: number;
+  updatedUrls: number;
+  deletedUrls: number;
+  deletedFlows: number;
+  deletedPrereqs: number;
+  errors: string[];
 }
 
 export interface CheckRecord {

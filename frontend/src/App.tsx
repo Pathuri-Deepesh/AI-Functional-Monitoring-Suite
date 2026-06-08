@@ -22,6 +22,7 @@ import {
   SettingsForm,
 } from "./components/forms";
 import { FlowEditorForm, PrereqStepEditorForm, StepEditorForm } from "./components/flowForms";
+import { ImportSwaggerModal } from "./components/ImportSwaggerModal";
 import type {
   AuditResult,
   Flow,
@@ -115,7 +116,8 @@ type ModalState =
   | { kind: "edit-step"; project: Project; flowDetail: FlowWithSteps; step: FlowStep; projectVars: ProjectVariable[] }
   | { kind: "confirm-delete-flow"; flow: Flow }
   | { kind: "add-prereq-step"; project: Project; siblings: PrereqStep[] }
-  | { kind: "edit-prereq-step"; project: Project; siblings: PrereqStep[]; step: PrereqStep };
+  | { kind: "edit-prereq-step"; project: Project; siblings: PrereqStep[]; step: PrereqStep }
+  | { kind: "import-swagger"; project: Project };
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<FullSnapshot | null>(null);
@@ -471,6 +473,7 @@ export default function App() {
           onEditPrereqStep={(step, siblings) =>
             setModal({ kind: "edit-prereq-step", project: activeProject, siblings, step })
           }
+          onImportSwagger={() => setModal({ kind: "import-swagger", project: activeProject })}
         />
       ) : (
         <main className="main">
@@ -541,6 +544,26 @@ export default function App() {
       >
         {modal.kind === "settings" && (
           <SettingsForm
+            project={modal.project}
+            onDone={handleFormDone}
+            onError={(m) => pushToast(m, "error")}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        open={modal.kind === "import-swagger"}
+        title="📥 Import from Swagger / OpenAPI"
+        subtitle={
+          modal.kind === "import-swagger"
+            ? `Into project: ${modal.project.name}`
+            : undefined
+        }
+        onClose={() => setModal({ kind: "none" })}
+        size="lg"
+      >
+        {modal.kind === "import-swagger" && (
+          <ImportSwaggerModal
             project={modal.project}
             onDone={handleFormDone}
             onError={(m) => pushToast(m, "error")}

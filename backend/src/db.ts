@@ -330,6 +330,14 @@ function initSchema(d: DatabaseSync): void {
   // slack_bot_token / slack_channel columns remain in the schema but are no
   // longer read or written; left dormant to avoid a destructive table rebuild.
   ensureColumn(d, "projects", "notification_emails", "notification_emails TEXT NOT NULL DEFAULT ''");
+
+  // Phase 1.26 — Swagger / OpenAPI import provenance. NULL for manually-created
+  // URLs. import_source = operationId (or `${METHOD} ${pathTemplate}` fallback)
+  // identifies the operation across re-imports; import_spec_id (SHA-1 of spec
+  // title+version) scopes that identity to a particular spec so a same-named
+  // operation from a different spec doesn't false-match on diff.
+  ensureColumn(d, "urls", "import_source", "import_source TEXT");
+  ensureColumn(d, "urls", "import_spec_id", "import_spec_id TEXT");
 }
 
 function migrateFromJsonIfNeeded(d: DatabaseSync): void {

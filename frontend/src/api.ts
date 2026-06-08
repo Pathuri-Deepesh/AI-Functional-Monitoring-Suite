@@ -13,6 +13,9 @@ import type {
   FlowStep,
   FullSnapshot,
   HttpMethod,
+  ImportPreview,
+  ImportResult,
+  ImportSelections,
   KeyValue,
   MonitoredUrl,
   PrereqRun,
@@ -96,6 +99,40 @@ export async function exportProjectOpenAPI(
   const m = cd.match(/filename="([^"]+)"/);
   const filename = m ? m[1] : `openapi.${format}`;
   return { blob: await res.blob(), filename };
+}
+
+// Phase 1.26 — Swagger import. Two-step flow: preview is read-only and cheap to
+// re-run as the user toggles "include deprecated"; apply is the transactional
+// write (all-or-nothing inside a single SQLite tx on the backend).
+export async function previewSwaggerImport(
+  projectId: string,
+  input: { specUrl: string; baseUrlOverride?: string; includeDeprecated?: boolean }
+): Promise<ImportPreview> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/import/openapi/preview`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    })
+  );
+}
+
+export async function applySwaggerImport(
+  projectId: string,
+  input: {
+    specUrl: string;
+    selections: ImportSelections;
+    baseUrlOverride?: string;
+    includeDeprecated?: boolean;
+  }
+): Promise<ImportResult> {
+  return jsonOrThrow(
+    await fetch(`${BASE}/projects/${projectId}/import/openapi/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    })
+  );
 }
 
 // ---- Keys ----

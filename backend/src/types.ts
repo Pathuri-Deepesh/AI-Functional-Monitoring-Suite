@@ -103,6 +103,14 @@ export interface MonitoredUrl {
   customHeaders: KeyValue[];
   queryParams: KeyValue[];
 
+  // Phase 1.26 — Swagger import provenance. NULL = manually created.
+  // importSource = operationId if set, else `${METHOD} ${pathTemplate}` — stable
+  // identity for re-import diffing. importSpecId = SHA-1 of spec title+version
+  // (scopes identity to a specific spec so re-importing a DIFFERENT spec doesn't
+  // false-match a same-named operation).
+  importSource: string | null;
+  importSpecId: string | null;
+
   // Latest snapshot (denormalized for fast reads)
   statusCode: number | null;
   statusGroup: StatusGroup | null;

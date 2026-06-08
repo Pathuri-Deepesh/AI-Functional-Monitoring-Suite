@@ -72,6 +72,8 @@ interface UrlRow {
   error_reason: string | null;
   timings_json: string | null;
   last_checked: string | null;
+  import_source: string | null;
+  import_spec_id: string | null;
 }
 
 interface CheckRow {
@@ -148,6 +150,8 @@ function rowToUrl(r: UrlRow): MonitoredUrl {
     timings: r.timings_json ? safeParse<Timings | null>(r.timings_json, null) : null,
     lastChecked: r.last_checked,
     lastAssertionResults: [], // populated on demand
+    importSource: r.import_source ?? null,
+    importSpecId: r.import_spec_id ?? null,
   };
 }
 
@@ -339,6 +343,8 @@ export function addUrl(input: {
   assertions?: Assertion[];
   customHeaders?: KeyValue[];
   queryParams?: KeyValue[];
+  importSource?: string | null;
+  importSpecId?: string | null;
 }): MonitoredUrl {
   const project = getProject(input.projectId);
   if (!project) throw new Error("Project not found");
@@ -369,8 +375,9 @@ export function addUrl(input: {
     .prepare(
       `INSERT INTO urls (id, project_id, url, description, api_key_id, interval_minutes,
                          method, body_type, body, body_content_type, assertions_json,
-                         custom_headers_json, query_params_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                         custom_headers_json, query_params_json,
+                         import_source, import_spec_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -385,9 +392,18 @@ export function addUrl(input: {
       (input.bodyContentType ?? "").trim(),
       JSON.stringify(input.assertions ?? []),
       JSON.stringify(cleanKv(input.customHeaders ?? [])),
-      JSON.stringify(cleanKv(input.queryParams ?? []))
+      JSON.stringify(cleanKv(input.queryParams ?? [])),
+      input.importSource ?? null,
+      input.importSpecId ?? null
     );
   return getUrl(id)!;
+}
+
+export function getUrlsByImportSpec(projectId: string, specId: string): MonitoredUrl[] {
+  const rows = db()
+    .prepare("SELECT * FROM urls WHERE project_id = ? AND import_spec_id = ? ORDER BY rowid")
+    .all(projectId, specId) as unknown as UrlRow[];
+  return rows.map(rowToUrl);
 }
 
 function cleanKv(arr: KeyValue[]): KeyValue[] {

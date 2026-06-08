@@ -61,6 +61,7 @@ interface Props {
   onDeleteFlow: (flow: Flow) => void;
   onAddPrereqStep: (siblings: PrereqStep[]) => void;
   onEditPrereqStep: (step: PrereqStep, siblings: PrereqStep[]) => void;
+  onImportSwagger: () => void;
   refreshTick: number;
 }
 
@@ -439,8 +440,14 @@ export function ProjectView(props: Props) {
                 <span style={{ marginLeft: 6 }}>Exporting…</span>
               </>
             ) : (
-              "📥 Export to Swagger"
+              "📤 Export to Swagger"
             )}
+          </button>
+          <button
+            onClick={props.onImportSwagger}
+            title="Paste a Swagger/OpenAPI 3.x spec URL — one Monitored URL is created per endpoint. Flows + prereqs are round-tripped when the spec was exported by this suite."
+          >
+            📥 Import from Swagger
           </button>
           <button className="ghost" onClick={props.onSettings} title="Project settings">
             ⚙

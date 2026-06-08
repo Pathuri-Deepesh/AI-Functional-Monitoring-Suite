@@ -5,6 +5,11 @@ import { mkdirSync, createReadStream, statSync, unlinkSync, writeFileSync } from
 import { resolve } from "node:path";
 import { buildOpenAPISpec } from "./openapiExport.js";
 import {
+  applyImport,
+  diffSpecAgainstProject,
+  fetchAndParseSpec,
+} from "./openapiImport.js";
+import {
   addApiKey,
   addFlowStep,
   addPrereqStep,
@@ -154,6 +159,96 @@ app.get("/api/projects/:id/export/openapi", (req, res) => {
   );
   res.setHeader("content-disposition", `attachment; filename="${filename}"`);
   res.send(body);
+});
+
+// ---------- OpenAPI / Swagger import (Phase 1.26) ----------
+//
+// Two endpoints split read-only from transactional writes:
+//   POST /preview — fetch spec, diff against project, return preview (no writes)
+//   POST /apply   — atomically create selected URLs (+ round-trip flows/prereqs if present)
+//
+// Both expect { specUrl: string, baseUrlOverride?: string, includeDeprecated?: boolean }
+// in the body. /apply additionally takes the user's per-section selections.
+
+app.post("/api/projects/:id/import/openapi/preview", async (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  const { specUrl, baseUrlOverride, includeDeprecated } = req.body ?? {};
+  if (typeof specUrl !== "string" || !specUrl.trim()) {
+    res.status(400).json({ error: "specUrl is required" });
+    return;
+  }
+  try {
+    const parsed = await fetchAndParseSpec(specUrl);
+    const urls = listUrlsByProject(project.id);
+    const flows = listFlowsByProject(project.id)
+      .map((f) => getFlowWithSteps(f.id))
+      .filter((f): f is NonNullable<typeof f> => Boolean(f));
+    const prereqs = listPrereqSteps(project.id);
+    const diff = diffSpecAgainstProject(parsed, project, urls, flows, prereqs, {
+      includeDeprecated: !!includeDeprecated,
+      baseUrlOverride: typeof baseUrlOverride === "string" ? baseUrlOverride : undefined,
+    });
+    res.json({
+      diff,
+      specMeta: {
+        title: parsed.specTitle,
+        version: parsed.specVersion,
+        specId: parsed.specId,
+        isRoundTrip: parsed.isRoundTrip,
+      },
+    });
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+app.post("/api/projects/:id/import/openapi/apply", async (req, res) => {
+  const project = getProject(req.params.id);
+  if (!project) {
+    res.status(404).json({ error: "Project not found" });
+    return;
+  }
+  const {
+    specUrl,
+    selections,
+    baseUrlOverride,
+    includeDeprecated,
+  } = req.body ?? {};
+  if (typeof specUrl !== "string" || !specUrl.trim()) {
+    res.status(400).json({ error: "specUrl is required" });
+    return;
+  }
+  if (!selections || typeof selections !== "object") {
+    res.status(400).json({ error: "selections object is required" });
+    return;
+  }
+  try {
+    const parsed = await fetchAndParseSpec(specUrl);
+    const result = applyImport(project.id, parsed, {
+      endpointIdentities: Array.isArray(selections.endpointIdentities)
+        ? selections.endpointIdentities
+        : [],
+      flowIds: Array.isArray(selections.flowIds) ? selections.flowIds : [],
+      prereqIds: Array.isArray(selections.prereqIds) ? selections.prereqIds : [],
+      deleteUrlIds: Array.isArray(selections.deleteUrlIds) ? selections.deleteUrlIds : [],
+      deleteFlowIds: Array.isArray(selections.deleteFlowIds) ? selections.deleteFlowIds : [],
+      deletePrereqIds: Array.isArray(selections.deletePrereqIds)
+        ? selections.deletePrereqIds
+        : [],
+      apiKeyCreates: Array.isArray(selections.apiKeyCreates)
+        ? selections.apiKeyCreates
+        : [],
+      baseUrlOverride: typeof baseUrlOverride === "string" ? baseUrlOverride : undefined,
+      includeDeprecated: !!includeDeprecated,
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 // ---------- API Keys ----------
