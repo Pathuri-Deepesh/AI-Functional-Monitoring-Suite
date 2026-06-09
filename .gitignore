@@ -63,8 +63,11 @@ postman/
 
 # Internal tracker artifacts + helper scripts (kept local — excluded from GitLab push)
 .claude_internal/
-project-tracker.xlsx
-project-tracker.csv
-PROGRESS.md
-README.md
+documentation/project-tracker.xlsx
+documentation/project-tracker.csv
+documentation/PROGRESS.md
 .mcp.json
+
+# Legacy root-level tracker leftovers (file was moved to documentation/ but Excel may still hold an open handle at root)
+/project-tracker.xlsx
+/~$project-tracker.xlsx
