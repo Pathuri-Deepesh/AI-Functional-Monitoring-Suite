@@ -2,7 +2,7 @@
 
 > 1-pager snapshot of where the project is **right now**. Updated after every shipped phase. For the stable map of the system see [ARCHITECTURE.md](ARCHITECTURE.md); for the full history see [PROGRESS.md](PROGRESS.md).
 
-**Last updated:** 2026-06-09
+**Last updated:** 2026-06-10
 **Owner:** Deepesh P · **Company:** Logitech
 **Branch:** `main` (GitHub) · `main` *(GitLab default is `master` — needs settings access to switch)*
 
@@ -10,9 +10,9 @@
 
 ## Current phase
 
-**Phase 1.26.1 — Import-from-Swagger UI/UX polish** ✅ Shipped 2026-06-08
+**Phase 1.26.2 — Notification correctness fixes** ✅ Shipped 2026-06-10
 
-The OpenAPI import modal was functional after Phase 1.26 but visually rough (raw HTML checkboxes, hardcoded hex colors, untreated tables). 1.26.1 rebuilt it on the design system: real iOS-style toggles, stacked auth-scheme cards with 3 state variants (matched / unsupported / new), proper per-section selection counts, sticky `.modal-actions` footer, and `.method-tag` / `.pill` re-use instead of bespoke badges. ~190 lines of CSS, no backend changes.
+Two related bugs in [backend/src/monitor.ts](../backend/src/monitor.ts) closed in ~10 lines: (1) `errorReason` was `null` on a healthy 2xx response that failed an assertion, so the email/Slack template rendered the literal string "Unknown failure" — now the first failed assertion's `detail` (e.g. `"Expected 201, got 200"`) flows through; (2) `wasFailing` was derived from `statusGroup` alone, so a 2xx-with-failed-assertion stayed in the "OK" bucket every tick and the OK→FAIL gate re-fired the alert every interval — now `wasFailing` mirrors the new `ok` semantics (status + assertions), with a first-ever-check carve-out so the initial failure still notifies.
 
 ## What's shipped end-to-end and demo-ready
 
@@ -36,15 +36,14 @@ The OpenAPI import modal was functional after Phase 1.26 but visually rough (raw
 
 ## Open items / known bugs
 
-1. **"Reason: Unknown failure" in notifications when a 200 response fails an assertion.** [monitor.ts:78](../backend/src/monitor.ts#L78) only populates `errorReason` for 4xx/5xx/error — assertion failures on a 2xx status leave it `null`, and the email template falls back to the literal string "Unknown failure". *(Identified 2026-06-09, not yet patched.)*
-2. **Repeat alerts when assertions keep failing on a 200 response.** `wasFailing` is computed from `statusGroup` alone, which stays `"2xx"` across ticks even when `ok` is `false` — so the OK→FAIL gate doesn't deduplicate. *(Identified 2026-06-09, not yet patched. Fix is in the same file as #1.)*
-3. **GitLab default branch is `master`, current pushes land on `main`.** Needs a settings tweak from the manager (or a one-shot rename) before the GitLab mirror is useful.
-4. **No SMTP creds in production / shared dev** — `.env` is local-only. Each contributor follows the kid-friendly guide in [backend/.env.example](../backend/.env.example) (Gmail App Password path takes ~5 min).
+1. **GitLab default branch is `master`, current pushes land on `main`.** Needs a settings tweak from the manager (or a one-shot rename) before the GitLab mirror is useful.
+2. **GitLab push still blocked on auth.** The token user created had wrong type (Feed token `glft-` instead of PAT `glpat-`). Needs a fresh PAT with `write_repository` scope before the next push to GitLab will succeed.
+3. **No SMTP creds in production / shared dev** — `.env` is local-only. Each contributor follows the kid-friendly guide in [backend/.env.example](../backend/.env.example) (Gmail App Password path takes ~5 min).
 
 ## Next up (in order)
 
-1. Fix the two notification bugs above — small ~4-line change in [monitor.ts](../backend/src/monitor.ts); also patches the silent re-fire spam.
-2. Demo the Swagger import flow end-to-end with a manager-supplied spec URL (Petstore and Stripe specs already smoke-tested locally).
+1. Demo the Swagger import flow end-to-end with a manager-supplied spec URL (Petstore and Stripe specs already smoke-tested locally).
+2. Fresh GitLab PAT with `write_repository` scope → push `main` to the GitLab mirror.
 3. Schedule Phase 2 AI kick-off meeting with manager.
 
 ## Where things live

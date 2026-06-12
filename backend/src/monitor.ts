@@ -40,8 +40,12 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   const url = getUrl(urlId);
   if (!url) return undefined;
   const project = getProject(url.projectId);
-  const wasFailing =
-    url.statusGroup === "error" || url.statusGroup === "5xx" || url.statusGroup === "4xx";
+  // Must mirror the `ok` semantics below (status + assertions). Using statusGroup
+  // alone misses 2xx responses that fail an assertion — wasFailing stays false and
+  // the OK→FAIL gate re-fires every tick. First-ever check has no prior snapshot.
+  const lastStatusOk = url.statusGroup === "2xx" || url.statusGroup === "3xx";
+  const lastAssertionsOk = url.lastAssertionResults.every((r) => r.passed);
+  const wasFailing = url.lastChecked != null && !(lastStatusOk && lastAssertionsOk);
 
   const headers: Record<string, string> = {};
   const auth = resolveApiKeyHeader(url);
@@ -90,6 +94,13 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   const allAssertionsPassed = assertionResults.every((r) => r.passed);
   const statusOk = statusGroup === "2xx" || statusGroup === "3xx";
   const ok = statusOk && allAssertionsPassed;
+
+  // Surface the assertion detail when the response was a healthy 2xx/3xx but an
+  // assertion failed — otherwise email/Slack render the literal "Unknown failure".
+  if (errorReason == null && !ok) {
+    const firstFailed = assertionResults.find((r) => !r.passed);
+    if (firstFailed) errorReason = `Assertion failed: ${firstFailed.detail}`;
+  }
 
   recordCheck({
     urlId: url.id,

@@ -133,13 +133,21 @@ Boots Express, mounts ~60 REST routes grouped by resource (projects, urls, api-k
 - Network errors / timeouts / DNS failures → `error`
 - Assertion failures override: a 200 response can still be `ok: false` if an assertion failed
 
-**Failure notification gate (current behaviour):**
+**Failure notification gate (current behaviour, post Phase 1.26.2):**
 ```
-const wasFailing = prevStatusGroup ∈ {4xx, 5xx, error}
-const isFailingNow = !ok
+const lastStatusOk      = prevStatusGroup ∈ {2xx, 3xx}
+const lastAssertionsOk  = prevAssertionResults.every(passed)
+const wasFailing        = url.lastChecked != null && !(lastStatusOk && lastAssertionsOk)
+const isFailingNow      = !ok
 if (isFailingNow && !wasFailing) → fire Slack + Email
 ```
-Alerts fire on the **OK→FAIL transition only**, not on every failing tick (no spam). One known sharp edge: if the failure is a 200-status + failed-assertion, `prevStatusGroup` stays "2xx" so successive ticks can re-fire — see [STATUS.md](STATUS.md) for whether this is currently patched.
+Alerts fire on the **OK→FAIL transition only**, not on every failing tick (no spam). `wasFailing` mirrors the same `ok` semantics as the current check (`statusOk && allAssertionsPassed`), so a 200-status + failed-assertion no longer slips through the dedup gate. The `lastChecked != null` carve-out keeps a brand-new URL's first-ever failure from being suppressed (without it, the empty `lastAssertionResults` array's `.every()` returns true → `wasFailing` would incorrectly be `true` on the very first check).
+
+**`errorReason` population (what shows up in the alert body):**
+- Transport failure (DNS, TCP, TLS, timeout) → `reasonForError(node-error-code)`
+- HTTP 4xx / 5xx → `reasonForStatus(code)` (human string like "Server error (500)")
+- 2xx response that failed an assertion → `"Assertion failed: " + firstFailed.detail` (e.g. `"Assertion failed: Expected 201, got 200."`)
+- All-pass → `null` (no notification fires)
 
 ### Retention
 
