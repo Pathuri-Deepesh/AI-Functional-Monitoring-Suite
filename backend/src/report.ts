@@ -33,6 +33,32 @@ export function renderReportHtml(args: RenderArgs): string {
   const okFlows = flowSummaries.filter((s) => s.latestRun?.ok === true).length;
   const generatedAt = new Date().toLocaleString();
 
+  // Unified failures list (URLs + flows), each with target name, reason, when,
+  // and an anchor id that jumps to the full row in the tables below.
+  type FailureRow = { type: "URL" | "FLOW"; name: string; reason: string; when: string; anchorId: string };
+  const failures: FailureRow[] = [
+    ...failingUrls.map<FailureRow>((u) => ({
+      type: "URL",
+      name: `${u.method} ${u.url}`,
+      reason: u.errorReason ?? "Failed (no reason recorded)",
+      when: u.lastChecked ? new Date(u.lastChecked).toLocaleString() : "—",
+      anchorId: `url-${u.id}`,
+    })),
+    ...failingFlows.map<FailureRow>(({ flow, latestRun }) => {
+      const failedStep = latestRun?.stepResults.find((sr) => !sr.ok && !sr.skipped);
+      const stepLabel = failedStep ? `step ${failedStep.position}` : "unknown step";
+      return {
+        type: "FLOW",
+        name: `${flow.name} — ${stepLabel}`,
+        reason: failedStep?.errorReason ?? "Failed (no reason recorded)",
+        when: latestRun ? new Date(latestRun.startedAt).toLocaleString() : "—",
+        anchorId: `flow-${flow.id}`,
+      };
+    }),
+  ];
+  const totalFailing = failures.length;
+  const totalEndpoints = urls.length + flowSummaries.length;
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -73,6 +99,22 @@ export function renderReportHtml(args: RenderArgs): string {
   .step-line:first-child { border-top: 0; }
   .step-num { display: inline-block; min-width: 20px; height: 20px; line-height: 20px; text-align: center; background: ${COLORS.panel2}; border-radius: 50%; font-weight: 700; font-size: 10px; color: ${COLORS.muted}; font-family: ui-monospace, monospace; }
   .empty-section { text-align: center; color: ${COLORS.muted}; padding: 32px; background: ${COLORS.panel}; border: 1px dashed ${COLORS.border}; border-radius: 12px; }
+  .hero { padding: 20px 24px; border-radius: 12px; margin: 0 0 16px; display: flex; align-items: center; gap: 20px; border: 1px solid; }
+  .hero-num { font-size: 40px; font-weight: 800; line-height: 1; min-width: 56px; text-align: center; }
+  .hero-text { font-size: 13px; color: ${COLORS.muted}; }
+  .hero-text strong { display: block; font-size: 16px; font-weight: 700; color: ${COLORS.text}; margin-bottom: 4px; }
+  .hero-ok { background: rgba(16,185,129,0.08); border-color: rgba(16,185,129,0.35); }
+  .hero-ok .hero-num { color: ${COLORS.g2xx}; }
+  .hero-fail { background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.35); }
+  .hero-fail .hero-num { color: ${COLORS.g5xx}; }
+  .failures-summary { margin: 24px 0; scroll-margin-top: 20px; }
+  .failures-summary table { border-color: rgba(239,68,68,0.3); }
+  .failures-summary th { color: ${COLORS.g5xx}; }
+  .fail-type { display: inline-block; font-size: 10px; padding: 3px 8px; border-radius: 4px; background: rgba(239,68,68,0.15); color: ${COLORS.g5xx}; font-weight: 700; letter-spacing: 0.05em; }
+  .fail-reason { color: ${COLORS.text}; font-weight: 600; font-size: 13px; }
+  .jump-link { color: ${COLORS.accent}; text-decoration: none; font-size: 12px; white-space: nowrap; }
+  .jump-link:hover { text-decoration: underline; }
+  tr[id] { scroll-margin-top: 20px; }
   footer { margin-top: 32px; color: ${COLORS.muted}; font-size: 12px; text-align: center; }
 </style>
 </head>
@@ -83,6 +125,18 @@ export function renderReportHtml(args: RenderArgs): string {
     <div class="sub">${escapeHtml(project.description || "")}</div>
     <div class="sub">Generated ${escapeHtml(generatedAt)}</div>
   </header>
+
+  <div class="hero ${totalFailing > 0 ? "hero-fail" : "hero-ok"}">
+    <div class="hero-num">${totalFailing > 0 ? totalFailing : "&check;"}</div>
+    <div class="hero-text">
+      ${totalFailing > 0
+        ? `<strong>${totalFailing} ${totalFailing === 1 ? "failure needs" : "failures need"} attention</strong>
+           ${failingUrls.length} URL${failingUrls.length === 1 ? "" : "s"} · ${failingFlows.length} flow${failingFlows.length === 1 ? "" : "s"} failing out of ${totalEndpoints} endpoints monitored`
+        : `<strong>All systems healthy</strong>
+           All ${totalEndpoints} endpoint${totalEndpoints === 1 ? "" : "s"} passing as of ${escapeHtml(generatedAt)}`
+      }
+    </div>
+  </div>
 
   <div class="kpis">
     <div class="kpi">
@@ -106,6 +160,30 @@ export function renderReportHtml(args: RenderArgs): string {
     </div>
   </div>
 
+  ${totalFailing > 0 ? `
+  <section class="failures-summary">
+    <h2>🚨 Failures requiring attention <span class="count">${totalFailing}</span></h2>
+    <table>
+      <thead>
+        <tr><th>Type</th><th>Target</th><th>Reason</th><th>Last seen</th><th></th></tr>
+      </thead>
+      <tbody>
+        ${failures
+          .map(
+            (f) => `
+        <tr>
+          <td><span class="fail-type">${f.type}</span></td>
+          <td><span class="url">${escapeHtml(f.name)}</span></td>
+          <td class="fail-reason">${escapeHtml(f.reason)}</td>
+          <td><div class="sub">${escapeHtml(f.when)}</div></td>
+          <td><a class="jump-link" href="#${f.anchorId}">View details &darr;</a></td>
+        </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+  </section>` : ""}
+
   <h2>🔗 Standalone URLs <span class="count">${urls.length}</span></h2>
   ${urls.length === 0 ? `<div class="empty-section">No standalone URLs in this project.</div>` : `
   <table>
@@ -118,7 +196,7 @@ export function renderReportHtml(args: RenderArgs): string {
           const s = stats[u.id];
           const sp = sparklines[u.id] ?? [];
           return `
-      <tr>
+      <tr id="url-${escapeHtml(u.id)}">
         <td>
           <div><span class="method">${escapeHtml(u.method)}</span><span class="url">${escapeHtml(u.url)}</span></div>
           ${u.description ? `<div class="sub">${escapeHtml(u.description)}</div>` : ""}
@@ -151,7 +229,7 @@ export function renderReportHtml(args: RenderArgs): string {
           const okSteps = latestRun ? latestRun.stepResults.filter((sr) => sr.ok || sr.skipped).length : 0;
           const failedStep = latestRun ? latestRun.stepResults.find((sr) => !sr.ok && !sr.skipped) : null;
           return `
-      <tr>
+      <tr id="flow-${escapeHtml(flow.id)}">
         <td>
           <div class="flow-name"><strong>${escapeHtml(flow.name)}</strong></div>
           ${flow.description ? `<div class="sub">${escapeHtml(flow.description)}</div>` : ""}

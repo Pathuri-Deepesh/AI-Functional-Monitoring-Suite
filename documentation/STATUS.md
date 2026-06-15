@@ -2,13 +2,21 @@
 
 > 1-pager snapshot of where the project is **right now**. Updated after every shipped phase. For the stable map of the system see [ARCHITECTURE.md](ARCHITECTURE.md); for the full history see [PROGRESS.md](PROGRESS.md).
 
-**Last updated:** 2026-06-10
+**Last updated:** 2026-06-15
 **Owner:** Deepesh P · **Company:** Logitech
 **Branch:** `main` (GitHub) · `main` *(GitLab default is `master` — needs settings access to switch)*
 
 ---
 
 ## Current phase
+
+**Phase 1.26.4 — Snapshot & Report elegance pass** ✅ Shipped 2026-06-15
+
+Two surfaces upgraded: (a) the HTML report attachment ([backend/src/report.ts](../backend/src/report.ts)) and (b) the **email body itself** ([backend/src/email.ts](../backend/src/email.ts)). Previously the email was thin counts only — recipient had to open the attachment to learn which endpoints failed and why. Now the inbox preview itself is actionable. Four changes in `report.ts` and two in `email.ts`, ~120 lines net, no logic/contract/schema impact: (1) hero banner under the report header — green check (all-healthy) or large red failure count with caption `"N endpoint(s) need attention out of M total monitored"`; (2) unified failures-summary table between KPIs and main tables, grouping every failing URL + flow with type/name/reason/when columns, omitted entirely when project is healthy; (3) anchor IDs on every row + "View details ↓" jump links from the summary, so clicking a failure jumps to its full row (with 5-phase latency, assertions, sparkline) below — survives Gmail's JS stripping because fragment links aren't JS; (4) **the email body now contains the same hero banner + failures table inline**, with clickable links pointing at `${reportUrl}#url-{id}` and `${reportUrl}#flow-{id}` so the manager can triage from the inbox preview without opening the attachment.
+
+**Phase 1.26.3 — Flow notification gate fix** ✅ Shipped 2026-06-15
+
+User pinged an inbox screenshot — 10,585 unread, same flow paging at 3:35, 3:35, 3:37, 3:39. Root cause: [backend/src/flowRunner.ts](../backend/src/flowRunner.ts) end-of-run had **no OK→FAIL gate at all**. Phase 1.26.2 patched the URL companion site in `monitor.ts` but missed the flow path. Fix mirrors the URL semantics — look up the previous run via `listFlowRuns(flow.id, 2).find(r => r.id !== runId)` and alert iff first-ever run, or genuine OK→FAIL transition, or the failure reason has changed from last time. The reason-change branch was a deliberate user ask — they didn't want a flow flipping from "step 2 timed out" to "step 5 returned 500" to be silently absorbed.
 
 **Phase 1.26.2 — Notification correctness fixes** ✅ Shipped 2026-06-10
 

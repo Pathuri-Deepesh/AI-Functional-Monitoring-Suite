@@ -15,6 +15,7 @@ import {
   getFlowWithSteps,
   getProject,
   getProjectVariables,
+  listFlowRuns,
   markFlowRunCompletedAt,
   recordStepResult,
   resolveApiKeyHeader,
@@ -809,10 +810,31 @@ async function executeRun(
     if (run) {
       const failedStep =
         flow.steps.find((s) => s.id === run.failedAtStepId) ?? null;
-      void Promise.allSettled([
-        sendFlowFailureAlert(flow as Flow, run, project),
-        sendFlowFailureEmail(flow as Flow, run, project, failedStep),
-      ]);
+
+      // OK→FAIL gate + reason-change escalation. Mirrors the URL path in
+      // monitor.ts so a flow that fails every interval doesn't spam an alert
+      // every run. listFlowRuns is DESC and includes the just-finished run, so
+      // we filter by id to find the truly-previous run.
+      const recent = listFlowRuns(flow.id, 2);
+      const previousRun = recent.find((r) => r.id !== runId) ?? null;
+      const previousReason = previousRun
+        ? previousRun.stepResults.find((sr) => sr.stepId === previousRun.failedAtStepId)
+            ?.errorReason ?? null
+        : null;
+      const currentReason =
+        run.stepResults.find((sr) => sr.stepId === run.failedAtStepId)?.errorReason ?? null;
+
+      const shouldAlert =
+        previousRun == null ||           // first-ever run for this flow
+        previousRun.ok === true ||       // OK→FAIL transition
+        previousReason !== currentReason; // failing for a NEW reason — escalate
+
+      if (shouldAlert) {
+        void Promise.allSettled([
+          sendFlowFailureAlert(flow as Flow, run, project),
+          sendFlowFailureEmail(flow as Flow, run, project, failedStep),
+        ]);
+      }
     }
   }
 
