@@ -1,9 +1,10 @@
 import { reasonForError, reasonForStatus } from "./errorReason.js";
 import { sendSlackAlert } from "./slack.js";
-import { sendUrlFailureEmail } from "./email.js";
+import { classifyFailure, pickRecipients, sendUrlFailureEmail } from "./email.js";
 import { evaluateAssertions } from "./assertions.js";
 import {
   getProject,
+  getProjectApiKeysScope,
   getProjectVariables,
   getUrl,
   listFlows,
@@ -12,7 +13,8 @@ import {
   recordCheck,
   resolveApiKeyHeader,
 } from "./store.js";
-import { pruneOldChecks } from "./db.js";
+import { pruneOldChecks, pruneOldReports } from "./db.js";
+import { resolve as resolvePath } from "node:path";
 import { timedFetch } from "./timing.js";
 import { runFlow } from "./flowRunner.js";
 import { runPrereqChain } from "./prereqRunner.js";
@@ -36,6 +38,10 @@ function substituteKv(items: KeyValue[], vars: Record<string, string>): KeyValue
   return items.map((it) => ({ key: it.key, value: substitute(it.value, vars) }));
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   const url = getUrl(urlId);
   if (!url) return undefined;
@@ -51,10 +57,15 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   const auth = resolveApiKeyHeader(url);
   if (auth) headers[auth.name] = auth.value;
 
-  // Resolve {{vars}} from the project pool (captured by the prereq chain).
-  const projectVars = getProjectVariables(url.projectId);
+  // Resolve {{vars}}. Phase 1.27.4 — vault API keys are exposed as variables
+  // (Postman-style) at the LOWEST priority so prereq-captured project vars can
+  // override on name collision.
+  const projectVars: Record<string, string> = {
+    ...getProjectApiKeysScope(url.projectId),
+    ...getProjectVariables(url.projectId),
+  };
 
-  const result = await timedFetch({
+  const requestSpec = {
     url: substitute(url.url, projectVars),
     method: url.method,
     bodyType: url.bodyType,
@@ -63,37 +74,60 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
     extraHeaders: headers,
     customHeaders: substituteKv(url.customHeaders, projectVars),
     queryParams: substituteKv(url.queryParams, projectVars),
-  });
+  };
 
-  const checkedAt = Date.now();
+  // Phase 1.27.3 — honor per-URL waitBeforeMs before the first attempt and
+  // retry on failure up to maxRetries with exponential backoff. Only the
+  // final attempt's outcome is recorded (no per-retry rows in `checks`).
+  // Skip retries on 4xx — those are deterministic client errors.
+  const waitBeforeMs = Math.max(0, Math.min(60_000, url.waitBeforeMs ?? 0));
+  const maxAttempts = 1 + Math.max(0, Math.min(10, url.maxRetries ?? 0));
+  const baseBackoff = Math.max(0, Math.min(60_000, url.retryBackoffMs ?? 0));
+
+  if (waitBeforeMs > 0) await sleep(waitBeforeMs);
+
+  let result!: Awaited<ReturnType<typeof timedFetch>>;
   let statusCode: number | null = null;
   let statusGroup: StatusGroup | null = null;
   let errorReason: string | null = null;
+  let assertionResults: ReturnType<typeof evaluateAssertions> = [];
+  let ok = false;
 
-  if (result.error) {
-    statusCode = null;
-    statusGroup = "error";
-    errorReason = reasonForError(result.error);
-  } else {
-    const code = result.statusCode ?? 0;
-    statusCode = code || null;
-    statusGroup = code ? classify(code) : "error";
-    const isFailure = statusGroup === "4xx" || statusGroup === "5xx" || statusGroup === "error";
-    errorReason = isFailure ? reasonForStatus(code) : null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await sleep(baseBackoff * Math.pow(2, attempt - 1));
+
+    result = await timedFetch(requestSpec);
+
+    if (result.error) {
+      statusCode = null;
+      statusGroup = "error";
+      errorReason = reasonForError(result.error);
+    } else {
+      const code = result.statusCode ?? 0;
+      statusCode = code || null;
+      statusGroup = code ? classify(code) : "error";
+      const isFailure = statusGroup === "4xx" || statusGroup === "5xx" || statusGroup === "error";
+      errorReason = isFailure ? reasonForStatus(code) : null;
+    }
+
+    assertionResults = evaluateAssertions(
+      url.assertions,
+      {
+        statusCode,
+        totalMs: result.timings.totalMs,
+        responseBody: result.responseBody,
+      },
+      projectVars
+    );
+    const allAssertionsPassed = assertionResults.every((r) => r.passed);
+    const statusOk = statusGroup === "2xx" || statusGroup === "3xx";
+    ok = statusOk && allAssertionsPassed;
+
+    // Stop retrying on success, or on a deterministic 4xx (client error).
+    if (ok || statusGroup === "4xx") break;
   }
 
-  const assertionResults = evaluateAssertions(
-    url.assertions,
-    {
-      statusCode,
-      totalMs: result.timings.totalMs,
-      responseBody: result.responseBody,
-    },
-    projectVars
-  );
-  const allAssertionsPassed = assertionResults.every((r) => r.passed);
-  const statusOk = statusGroup === "2xx" || statusGroup === "3xx";
-  const ok = statusOk && allAssertionsPassed;
+  const checkedAt = Date.now();
 
   // Surface the assertion detail when the response was a healthy 2xx/3xx but an
   // assertion failed — otherwise email/Slack render the literal "Unknown failure".
@@ -121,13 +155,18 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   // Notifications: alert on transition into failing state. Slack + email fire
   // in parallel via Promise.allSettled so one channel's failure can't suppress
   // the other. Each sender has its own internal "is configured" gate.
+  // Phase 1.27.2 — route latency-only failures to the dedicated recipient list;
+  // mixed and non-latency failures go to the general list (also the fallback
+  // when the latency list is empty).
   const isFailingNow = !ok;
   if (isFailingNow && !wasFailing && project) {
+    const category = classifyFailure(assertionResults);
+    const emailRecipients = pickRecipients(project, category);
     void Promise.allSettled([
       project.slackWebhookUrl
         ? sendSlackAlert(project.slackWebhookUrl, project, updated)
         : Promise.resolve(),
-      sendUrlFailureEmail(project, updated),
+      sendUrlFailureEmail(project, updated, emailRecipients),
     ]);
   }
 
@@ -229,4 +268,8 @@ export function startMonitorLoop(): void {
   setInterval(() => void tick(), TICK_MS);
   pruneOldChecks();
   setInterval(() => pruneOldChecks(), PRUNE_MS);
+  // Phase 1.27.9 — also sweep the audit-report HTML directory.
+  const reportsDir = resolvePath("./data/reports");
+  pruneOldReports(reportsDir);
+  setInterval(() => pruneOldReports(reportsDir), PRUNE_MS);
 }

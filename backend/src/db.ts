@@ -1,6 +1,14 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { mkdirSync, readFileSync, renameSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const DB_FILE = "./data/db.sqlite";
@@ -331,6 +339,20 @@ function initSchema(d: DatabaseSync): void {
   // longer read or written; left dormant to avoid a destructive table rebuild.
   ensureColumn(d, "projects", "notification_emails", "notification_emails TEXT NOT NULL DEFAULT ''");
 
+  // Phase 1.27.2 — Dual-channel email recipients. notification_emails is the
+  // GENERAL list (any non-latency failure). latency_failure_emails routes a
+  // failure caused solely by the `latency-under` assertion type to a different
+  // (perf-owner) audience. Empty = fall back to the general list.
+  ensureColumn(d, "projects", "latency_failure_emails", "latency_failure_emails TEXT NOT NULL DEFAULT ''");
+
+  // Phase 1.27.3 — Per-URL retry / wait. Defaults of 0 preserve the pre-1.27.3
+  // single-shot behaviour. waitBeforeMs delays the first attempt; maxRetries
+  // is the number of EXTRA attempts after the initial one (0 = no retries);
+  // retry_backoff_ms is the initial backoff, doubled on each subsequent retry.
+  ensureColumn(d, "urls", "max_retries", "max_retries INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(d, "urls", "retry_backoff_ms", "retry_backoff_ms INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(d, "urls", "wait_before_ms", "wait_before_ms INTEGER NOT NULL DEFAULT 0");
+
   // Phase 1.26 — Swagger / OpenAPI import provenance. NULL for manually-created
   // URLs. import_source = operationId (or `${METHOD} ${pathTemplate}` fallback)
   // identifies the operation across re-imports; import_spec_id (SHA-1 of spec
@@ -450,6 +472,41 @@ export function pruneOldChecks(): void {
   const pvc = db().prepare("DELETE FROM project_variable_cache WHERE expires_at < ?").run(Date.now());
   if (pvc.changes > 0) {
     console.log(`[db] pruned ${pvc.changes} expired project variable(s)`);
+  }
+}
+
+/**
+ * Phase 1.27.9 — sweep stale audit-report HTML files. They sit under
+ * data/reports/ and are never written to the DB, so the pre-existing
+ * retention sweeper missed them entirely. Without this they accumulate
+ * forever (~500KB each × daily audits = MBs/month → disk-exhaustion DoS on
+ * long-running instances).
+ */
+const REPORT_RETENTION_DAYS = 30;
+
+export function pruneOldReports(reportsDir: string): void {
+  const cutoffMs = Date.now() - REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+  let pruned = 0;
+  try {
+    const entries = readdirSync(reportsDir);
+    for (const name of entries) {
+      if (!name.endsWith(".html")) continue;
+      const fpath = join(reportsDir, name);
+      try {
+        const st = statSync(fpath);
+        if (st.isFile() && st.mtime.getTime() < cutoffMs) {
+          unlinkSync(fpath);
+          pruned++;
+        }
+      } catch {
+        // file disappeared between readdir and stat — fine
+      }
+    }
+  } catch {
+    // reports dir doesn't exist yet — fine
+  }
+  if (pruned > 0) {
+    console.log(`[db] pruned ${pruned} old audit report(s) (older than ${REPORT_RETENTION_DAYS} days)`);
   }
 }
 

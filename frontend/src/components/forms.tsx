@@ -1,7 +1,113 @@
 import { useEffect, useState } from "react";
-import { addApiKey, addUrl, createProject, removeApiKey, updateProject } from "../api";
-import type { Assertion, AssertionType, BodyType, HttpMethod, KeyValue, Project } from "../types";
+import {
+  addApiKey,
+  addUrl,
+  createProject,
+  fetchProjectVariables,
+  removeApiKey,
+  updateProject,
+  updateUrl,
+} from "../api";
+import type {
+  Assertion,
+  AssertionType,
+  BodyType,
+  HttpMethod,
+  KeyValue,
+  MonitoredUrl,
+  Project,
+  ProjectVariable,
+} from "../types";
 import { BinaryBodyEditor } from "./BinaryBodyEditor";
+import { useTheme, type ThemePref } from "../theme";
+import { slugifyKeyName } from "../slugify";
+
+export type SettingsPanel = "general" | "api-keys" | "notifications" | "appearance";
+
+// =============================================================
+// AvailableVarsPanel — reusable grouped {{var}} reference panel.
+// Used by AddUrlForm (standalone URLs), StepEditorForm (flow steps), and
+// PrereqStepEditorForm (prereq steps) so the user can see every variable
+// they're allowed to reference, grouped by source: API Key Vault,
+// Prerequisites, Step 1, Step 2, …
+// =============================================================
+export interface VarChip {
+  name: string;
+  tooltip?: string;
+}
+export interface VarGroup {
+  label: string;
+  icon?: string;
+  vars: VarChip[];
+}
+
+export function AvailableVarsPanel(props: { groups: VarGroup[] }) {
+  const nonEmpty = props.groups.filter((g) => g.vars.length > 0);
+  if (nonEmpty.length === 0) return null;
+
+  return (
+    <div className="vars-panel">
+      <div className="vars-panel-head">
+        <strong>Available variables</strong>
+        <span className="muted small">
+          use as <code>{`{{name}}`}</code> in any URL, body, header, or query param below
+        </span>
+      </div>
+      {nonEmpty.map((g) => (
+        <div className="vars-group" key={g.label}>
+          <span className="vars-group-label">
+            {g.icon && (
+              <span className="vars-group-icon" aria-hidden>
+                {g.icon}
+              </span>
+            )}
+            {g.label}
+          </span>
+          <div className="vars-group-chips">
+            {g.vars.map((v) => (
+              <span key={v.name} className="var-chip" title={v.tooltip}>
+                <code>{`{{${v.name}}}`}</code>
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Build the standard API-key group from a project's vault. Each key surfaces
+ * as `{{slugified_name}}` (Phase 1.27.4); the tooltip preserves the
+ * user-entered name so they can map the slug back to the vault entry.
+ */
+export function apiKeyVarsGroup(apiKeys: Project["apiKeys"]): VarGroup {
+  return {
+    label: "API Key Vault",
+    icon: "🔑",
+    vars: apiKeys.map((k) => ({
+      name: slugifyKeyName(k.name),
+      tooltip: `from vault key "${k.name}" — auto-injected into ${k.headerName} too`,
+    })),
+  };
+}
+
+/**
+ * Build the Prerequisites group from the project-pool variables captured by
+ * the prereq chain (the Phase 1.19 project_variable_cache).
+ */
+export function prereqVarsGroup(projectVars: ProjectVariable[]): VarGroup {
+  return {
+    label: "Prerequisites",
+    icon: "🔄",
+    vars: projectVars.map((v) => ({
+      name: v.name,
+      tooltip: v.expiresAt
+        ? `from prereq chain · expires ${new Date(v.expiresAt).toLocaleString()}`
+        : `from prereq chain · no TTL`,
+    })),
+  };
+}
 
 interface BaseProps {
   onDone: (msg?: string) => void | Promise<void>;
@@ -82,25 +188,57 @@ export function CreateProjectForm(props: BaseProps) {
 }
 
 // =============================================================
-// Add URL — Postman-style request builder
+// Add / Edit URL — Postman-style request builder.
+// When `url` prop is provided, the form pre-populates and submits as an edit.
 // =============================================================
-type BuilderTab = "basics" | "params" | "headers" | "body" | "assertions";
+type BuilderTab = "basics" | "params" | "headers" | "body" | "assertions" | "retry";
 
-export function AddUrlForm(props: BaseProps & { project: Project }) {
-  const [url, setUrl] = useState("");
-  const [method, setMethod] = useState<HttpMethod>("GET");
-  const [description, setDescription] = useState("");
-  const [apiKeyId, setApiKeyId] = useState("");
-  const [intervalMinutes, setIntervalMinutes] = useState(5);
-  const [bodyType, setBodyType] = useState<BodyType>("none");
-  const [body, setBody] = useState("");
-  const [bodyContentType, setBodyContentType] = useState("text/plain");
-  const [assertions, setAssertions] = useState<Assertion[]>([]);
-  const [customHeaders, setCustomHeaders] = useState<KeyValue[]>([]);
-  const [queryParams, setQueryParams] = useState<KeyValue[]>([]);
+export function AddUrlForm(props: BaseProps & { project: Project; url?: MonitoredUrl }) {
+  const editing = props.url != null;
+  const initial = props.url;
+
+  const [url, setUrl] = useState(initial?.url ?? "");
+  const [method, setMethod] = useState<HttpMethod>(initial?.method ?? "GET");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [apiKeyId, setApiKeyId] = useState(initial?.apiKeyId ?? "");
+  const [intervalMinutes, setIntervalMinutes] = useState(initial?.intervalMinutes ?? 5);
+  const [bodyType, setBodyType] = useState<BodyType>(initial?.bodyType ?? "none");
+  const [body, setBody] = useState(initial?.body ?? "");
+  const [bodyContentType, setBodyContentType] = useState(
+    initial?.bodyContentType?.trim() ? initial.bodyContentType : "text/plain"
+  );
+  const [assertions, setAssertions] = useState<Assertion[]>(initial?.assertions ?? []);
+  const [customHeaders, setCustomHeaders] = useState<KeyValue[]>(initial?.customHeaders ?? []);
+  const [queryParams, setQueryParams] = useState<KeyValue[]>(initial?.queryParams ?? []);
+  const [waitBeforeMs, setWaitBeforeMs] = useState(initial?.waitBeforeMs ?? 0);
+  const [maxRetries, setMaxRetries] = useState(initial?.maxRetries ?? 0);
+  const [retryBackoffMs, setRetryBackoffMs] = useState(initial?.retryBackoffMs ?? 0);
   const [tab, setTab] = useState<BuilderTab>("basics");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Fetch prereq-captured project vars on mount so the AvailableVarsPanel
+  // can surface them alongside the vault keys. Cheap (<10ms) and the user
+  // would otherwise have no discoverable way to know {{auth_token}} exists.
+  const [projectVars, setProjectVars] = useState<ProjectVariable[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetchProjectVariables(props.project.id)
+      .then((vars) => {
+        if (!cancelled) setProjectVars(vars);
+      })
+      .catch(() => {
+        /* non-fatal — panel just hides the prereq group */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [props.project.id]);
+
+  const varGroups: VarGroup[] = [
+    apiKeyVarsGroup(props.project.apiKeys),
+    prereqVarsGroup(projectVars),
+  ];
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -111,22 +249,31 @@ export function AddUrlForm(props: BaseProps & { project: Project }) {
     setBusy(true);
     setErr(null);
     try {
-      await addUrl(props.project.id, {
+      const payload = {
         url: url.trim(),
         description: description.trim(),
         apiKeyId: apiKeyId || null,
         intervalMinutes,
         method,
-        bodyType: method === "GET" ? "none" : bodyType,
+        bodyType: (method === "GET" ? "none" : bodyType) as BodyType,
         body: method === "GET" ? "" : body,
         bodyContentType: method === "GET" || bodyType !== "raw" ? "" : bodyContentType.trim(),
         assertions,
         customHeaders: customHeaders.filter((h) => h.key.trim()),
         queryParams: queryParams.filter((p) => p.key.trim()),
-      });
-      await props.onDone(`Added ${method} ${url.trim()}`);
+        waitBeforeMs: Math.max(0, Math.min(60_000, Math.floor(waitBeforeMs))),
+        maxRetries: Math.max(0, Math.min(10, Math.floor(maxRetries))),
+        retryBackoffMs: Math.max(0, Math.min(60_000, Math.floor(retryBackoffMs))),
+      };
+      if (editing && initial) {
+        await updateUrl(initial.id, payload);
+        await props.onDone(`Updated ${method} ${url.trim()}`);
+      } else {
+        await addUrl(props.project.id, payload);
+        await props.onDone(`Added ${method} ${url.trim()}`);
+      }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to add URL");
+      setErr(e instanceof Error ? e.message : editing ? "Failed to save URL" : "Failed to add URL");
     } finally {
       setBusy(false);
     }
@@ -135,9 +282,11 @@ export function AddUrlForm(props: BaseProps & { project: Project }) {
   const bodyAllowed = method !== "GET";
   const headerCount = customHeaders.filter((h) => h.key.trim()).length;
   const paramCount = queryParams.filter((p) => p.key.trim()).length;
+  const retryConfigured = waitBeforeMs > 0 || maxRetries > 0;
 
   return (
     <form className="form" onSubmit={submit}>
+      <AvailableVarsPanel groups={varGroups} />
       <div className="builder-tabs">
         <button type="button" className={`tab ${tab === "basics" ? "active" : ""}`} onClick={() => setTab("basics")}>
           Basics
@@ -170,6 +319,13 @@ export function AddUrlForm(props: BaseProps & { project: Project }) {
         >
           Assertions{assertions.length > 0 ? ` (${assertions.length})` : ""}
         </button>
+        <button
+          type="button"
+          className={`tab ${tab === "retry" ? "active" : ""}`}
+          onClick={() => setTab("retry")}
+        >
+          Retry / Wait{retryConfigured ? " ●" : ""}
+        </button>
       </div>
 
       {tab === "basics" && (
@@ -199,7 +355,7 @@ export function AddUrlForm(props: BaseProps & { project: Project }) {
           </Field>
           <div className="form-row">
             <Field label="API key" hint="Pick one of this project's keys">
-              <select value={apiKeyId} onChange={(e) => setApiKeyId(e.target.value)}>
+              <select value={apiKeyId ?? ""} onChange={(e) => setApiKeyId(e.target.value)}>
                 <option value="">No API key</option>
                 {props.project.apiKeys.map((k) => (
                   <option key={k.id} value={k.id}>
@@ -263,6 +419,48 @@ export function AddUrlForm(props: BaseProps & { project: Project }) {
         <AssertionsEditor assertions={assertions} setAssertions={setAssertions} />
       )}
 
+      {tab === "retry" && (
+        <>
+          <p className="sub small">
+            Mask flaky endpoints. <strong>Wait before</strong> delays the first attempt (useful for
+            eventually-consistent APIs). <strong>Max retries</strong> = extra attempts after a
+            failure. Backoff doubles after each retry. 4xx responses are NOT retried.
+          </p>
+          <div className="form-row">
+            <Field label="Wait before (ms)" hint="0 = no delay; max 60000">
+              <input
+                type="number"
+                min={0}
+                max={60_000}
+                value={waitBeforeMs}
+                onChange={(e) => setWaitBeforeMs(Number(e.target.value) || 0)}
+              />
+            </Field>
+            <Field label="Max retries" hint="0 = single-shot; max 10">
+              <input
+                type="number"
+                min={0}
+                max={10}
+                value={maxRetries}
+                onChange={(e) => setMaxRetries(Number(e.target.value) || 0)}
+              />
+            </Field>
+          </div>
+          <Field
+            label="Initial backoff (ms)"
+            hint="Doubled after each failed retry (e.g. 500 → 500 / 1000 / 2000 / 4000…)"
+          >
+            <input
+              type="number"
+              min={0}
+              max={60_000}
+              value={retryBackoffMs}
+              onChange={(e) => setRetryBackoffMs(Number(e.target.value) || 0)}
+            />
+          </Field>
+        </>
+      )}
+
       {err && <div className="inline-error">{err}</div>}
 
       <div className="modal-actions">
@@ -270,7 +468,7 @@ export function AddUrlForm(props: BaseProps & { project: Project }) {
           Cancel
         </button>
         <button type="submit" className="primary" disabled={busy}>
-          {busy ? "Adding…" : "Start monitoring"}
+          {busy ? (editing ? "Saving…" : "Adding…") : editing ? "Save changes" : "Start monitoring"}
         </button>
       </div>
     </form>
@@ -586,7 +784,9 @@ function assertionLabel(type: AssertionType): string {
 // =============================================================
 // API Key Manager
 // =============================================================
-export function ApiKeyManagerForm(props: BaseProps & { project: Project }) {
+export function ApiKeyManagerForm(
+  props: BaseProps & { project: Project; onClose?: () => void }
+) {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [headerName, setHeaderName] = useState("Authorization");
@@ -637,6 +837,9 @@ export function ApiKeyManagerForm(props: BaseProps & { project: Project }) {
                     {maskKey(k.value)}
                   </code>
                 </div>
+                <div className="key-meta" style={{ marginTop: 4 }}>
+                  Use as: <code>{`{{${slugifyKeyName(k.name)}}}`}</code>
+                </div>
               </div>
               <button
                 type="button"
@@ -651,10 +854,57 @@ export function ApiKeyManagerForm(props: BaseProps & { project: Project }) {
       )}
 
       <h4 className="section-h">Add a new key</h4>
-      <form onSubmit={add}>
-        <Field label="Key name" hint="A label so you can tell keys apart">
+      <p className="sub small" style={{ marginTop: -4, marginBottom: 12, color: "var(--muted)" }}>
+        Auto-injected into the configured header on every request. Also available
+        as <code>{`{{slugified_name}}`}</code> in any URL, body, header, or query
+        param across this project's URLs, flows, and prereq steps.
+      </p>
+      {/*
+        IMPORTANT: this form looks like a login form to browsers (text input +
+        password input next to each other), so Chrome/Edge/Safari try to
+        autofill it from saved credentials AFTER our setName('')/setValue('')
+        clear runs — bypassing React's controlled inputs by writing directly
+        to the DOM. Three defenses, all needed:
+          1. autoComplete='off' on the form (broad hint)
+          2. Specific autoComplete values per input (the real fix on Chrome):
+             - 'one-time-code' / 'off' on name, 'new-password' on the secret
+          3. key={keysVersion} on the form to remount it after each add/remove,
+             which discards any browser-injected DOM state for free.
+      */}
+      <form onSubmit={add} key={keysVersion} autoComplete="off">
+        {/* Honeypot fields the browser will autofill INTO instead of our real
+            inputs (off-screen, no React state binding, ignored on submit). */}
+        <input
+          type="text"
+          name="username"
+          autoComplete="username"
+          style={{ display: "none" }}
+          tabIndex={-1}
+          aria-hidden
+        />
+        <input
+          type="password"
+          name="password"
+          autoComplete="current-password"
+          style={{ display: "none" }}
+          tabIndex={-1}
+          aria-hidden
+        />
+
+        <Field
+          label="Key name"
+          hint={
+            name.trim()
+              ? `Variable: {{${slugifyKeyName(name)}}}`
+              : "A label so you can tell keys apart"
+          }
+        >
           <input
             type="text"
+            name="apikey_label"
+            autoComplete="off"
+            data-lpignore="true"
+            data-form-type="other"
             placeholder="e.g. Production"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -663,6 +913,10 @@ export function ApiKeyManagerForm(props: BaseProps & { project: Project }) {
         <Field label="Key value" hint="The actual secret token from the API provider">
           <input
             type="password"
+            name="apikey_secret"
+            autoComplete="new-password"
+            data-lpignore="true"
+            data-form-type="other"
             placeholder="paste your secret"
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -670,11 +924,19 @@ export function ApiKeyManagerForm(props: BaseProps & { project: Project }) {
         </Field>
         <div className="form-row">
           <Field label="Header name">
-            <input type="text" value={headerName} onChange={(e) => setHeaderName(e.target.value)} />
+            <input
+              type="text"
+              name="apikey_header_name"
+              autoComplete="off"
+              value={headerName}
+              onChange={(e) => setHeaderName(e.target.value)}
+            />
           </Field>
           <Field label="Prefix" hint="e.g. 'Bearer ' (with trailing space)">
             <input
               type="text"
+              name="apikey_header_prefix"
+              autoComplete="off"
               value={headerPrefix}
               onChange={(e) => setHeaderPrefix(e.target.value)}
             />
@@ -684,7 +946,11 @@ export function ApiKeyManagerForm(props: BaseProps & { project: Project }) {
         {err && <div className="inline-error">{err}</div>}
 
         <div className="modal-actions">
-          <button type="button" className="ghost" onClick={() => props.onDone()}>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => (props.onClose ? props.onClose() : props.onDone())}
+          >
             Done
           </button>
           <button type="submit" className="primary" disabled={busy}>
@@ -697,37 +963,168 @@ export function ApiKeyManagerForm(props: BaseProps & { project: Project }) {
 }
 
 // =============================================================
-// Settings (project + Slack webhook + email notifications)
+// Settings — 2-pane layout (left menu + right panel).
+// `onDone(msg?)` = action succeeded (toast + refresh, stay on page).
+// `onClose()`    = user wants to leave (closes modal OR navigates back, depending on host).
+// Panels: General · API Keys · Notifications · Appearance.
 // =============================================================
-export function SettingsForm(props: BaseProps & { project: Project }) {
-  const [name, setName] = useState(props.project.name);
-  const [description, setDescription] = useState(props.project.description);
-  const [slackWebhook, setSlackWebhook] = useState(props.project.slackWebhookUrl);
-  const [notificationEmails, setNotificationEmails] = useState(
-    props.project.notificationEmails
+export function SettingsForm(
+  props: BaseProps & {
+    project: Project;
+    initialPanel?: SettingsPanel;
+    onClose: () => void;
+    onPanelChange?: (panel: SettingsPanel) => void;
+  }
+) {
+  const [panel, setPanel] = useState<SettingsPanel>(props.initialPanel ?? "general");
+
+  // If the caller re-opens settings with a different initial panel, honor it.
+  useEffect(() => {
+    if (props.initialPanel) setPanel(props.initialPanel);
+  }, [props.initialPanel, props.project.id]);
+
+  function selectPanel(p: SettingsPanel) {
+    setPanel(p);
+    props.onPanelChange?.(p);
+  }
+
+  const panelProps = {
+    project: props.project,
+    onDone: props.onDone,
+    onClose: props.onClose,
+    onError: props.onError,
+  };
+
+  return (
+    <div className="settings-shell">
+      <nav className="settings-menu">
+        <SettingsMenuItem
+          icon="⚙"
+          label="General"
+          active={panel === "general"}
+          onClick={() => selectPanel("general")}
+        />
+        <SettingsMenuItem
+          icon="🔑"
+          label="API Keys"
+          active={panel === "api-keys"}
+          onClick={() => selectPanel("api-keys")}
+        />
+        <SettingsMenuItem
+          icon="🔔"
+          label="Notifications"
+          active={panel === "notifications"}
+          onClick={() => selectPanel("notifications")}
+        />
+        <SettingsMenuItem
+          icon="🎨"
+          label="Appearance"
+          active={panel === "appearance"}
+          onClick={() => selectPanel("appearance")}
+        />
+      </nav>
+
+      <section className="settings-panel">
+        {panel === "general" && <GeneralPanel {...panelProps} />}
+        {panel === "api-keys" && (
+          <>
+            <h4 className="settings-panel-title">API Keys</h4>
+            <ApiKeyManagerForm
+              project={props.project}
+              onDone={props.onDone}
+              onClose={props.onClose}
+              onError={props.onError}
+            />
+          </>
+        )}
+        {panel === "notifications" && <NotificationsPanel {...panelProps} />}
+        {panel === "appearance" && <AppearancePanel onClose={props.onClose} />}
+      </section>
+    </div>
   );
+}
+
+/**
+ * Page-mode wrapper for SettingsForm. Renders a back button + title above the
+ * shell so it reads as a dedicated page (not a modal) when mounted into the
+ * main content area.
+ */
+export function SettingsPage(props: {
+  project: Project;
+  initialPanel?: SettingsPanel;
+  onBack: () => void;
+  onDone: (msg?: string) => void | Promise<void>;
+  onError?: (msg: string) => void;
+  onPanelChange?: (panel: SettingsPanel) => void;
+}) {
+  return (
+    <main className="main settings-page">
+      <div className="settings-page-header">
+        <button className="ghost" onClick={props.onBack}>
+          ← Back to {props.project.name}
+        </button>
+        <div>
+          <h1 className="settings-page-title">Project settings</h1>
+          <p className="settings-page-sub">{props.project.name}</p>
+        </div>
+      </div>
+      <SettingsForm
+        project={props.project}
+        initialPanel={props.initialPanel}
+        onPanelChange={props.onPanelChange}
+        onDone={props.onDone}
+        onClose={props.onBack}
+        onError={props.onError}
+      />
+    </main>
+  );
+}
+
+function SettingsMenuItem(props: {
+  icon: string;
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`settings-menu-item ${props.active ? "active" : ""}`}
+      onClick={props.onClick}
+    >
+      <span className="settings-menu-icon" aria-hidden>
+        {props.icon}
+      </span>
+      {props.label}
+    </button>
+  );
+}
+
+// ----- General panel: name + description ---------------------------------
+function GeneralPanel(
+  props: BaseProps & { project: Project; onClose: () => void }
+) {
+  const [name, setName] = useState(props.project.name ?? "");
+  const [description, setDescription] = useState(props.project.description ?? "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    setName(props.project.name);
-    setDescription(props.project.description);
-    setSlackWebhook(props.project.slackWebhookUrl);
-    setNotificationEmails(props.project.notificationEmails);
-  }, [props.project.id]);
+    setName(props.project.name ?? "");
+    setDescription(props.project.description ?? "");
+  }, [props.project.id, props.project.name, props.project.description]);
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (!name.trim()) return;
     setBusy(true);
     setErr(null);
     try {
       await updateProject(props.project.id, {
         name: name.trim(),
         description: description.trim(),
-        slackWebhookUrl: slackWebhook.trim(),
-        notificationEmails: notificationEmails.trim(),
       });
-      await props.onDone("Settings saved");
+      await props.onDone("Project details saved");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to save");
     } finally {
@@ -737,7 +1134,7 @@ export function SettingsForm(props: BaseProps & { project: Project }) {
 
   return (
     <form className="form" onSubmit={save}>
-      <h4 className="section-h">Project</h4>
+      <h4 className="settings-panel-title">General</h4>
       <Field label="Project name" required>
         <input value={name} onChange={(e) => setName(e.target.value)} required />
       </Field>
@@ -745,7 +1142,196 @@ export function SettingsForm(props: BaseProps & { project: Project }) {
         <input value={description} onChange={(e) => setDescription(e.target.value)} />
       </Field>
 
-      <h4 className="section-h">Slack — failure alerts (webhook)</h4>
+      {err && <div className="inline-error">{err}</div>}
+
+      <div className="modal-actions">
+        <button type="button" className="ghost" onClick={props.onClose}>
+          Close
+        </button>
+        <button type="submit" className="primary" disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+// ----- Channel picker: dropdown to flip between General + Latency editors --
+// Keeps BOTH textareas' state alive in the parent — only the selected one is
+// rendered. Save still persists both. Per user request: "dont show both fields,
+// show only the selected one which we will be selecting in a dropdown".
+function ChannelPickerAndEditor(props: {
+  notificationEmails: string;
+  latencyFailureEmails: string;
+  onChangeGeneral: (v: string) => void;
+  onChangeLatency: (v: string) => void;
+}) {
+  type Channel = "general" | "latency";
+  const [channel, setChannel] = useState<Channel>("general");
+
+  const generalCount = countRecipients(props.notificationEmails);
+  const latencyCount = countRecipients(props.latencyFailureEmails);
+
+  return (
+    <>
+      <div className="channel-picker">
+        <label className="channel-picker-label" htmlFor="notif-channel-select">
+          Channel to edit
+        </label>
+        <select
+          id="notif-channel-select"
+          value={channel}
+          onChange={(e) => setChannel(e.target.value as Channel)}
+        >
+          <option value="general">
+            General failure emails {generalCount > 0 ? `(${generalCount})` : ""}
+          </option>
+          <option value="latency">
+            Latency failure emails {latencyCount > 0 ? `(${latencyCount})` : ""}
+          </option>
+        </select>
+      </div>
+
+      {channel === "general" ? (
+        <>
+          <p className="channel-info-line">
+            <strong>General failure emails</strong>
+            <span>· any non-latency failure + Snapshot/Report</span>
+            <span className={`channel-count ${generalCount === 0 ? "empty" : ""}`}>
+              {generalCount} {generalCount === 1 ? "recipient" : "recipients"}
+            </span>
+          </p>
+          <Field
+            label="Recipients"
+            hint="Comma / semicolon / newline separated. Sent on 4xx, 5xx, network errors, body-contains, status-assertion failures + Snapshot/Report button. SMTP must be configured in backend .env."
+          >
+            <textarea
+              rows={5}
+              placeholder="oncall@example.com, alice@example.com"
+              value={props.notificationEmails}
+              onChange={(e) => props.onChangeGeneral(e.target.value)}
+            />
+          </Field>
+        </>
+      ) : (
+        <>
+          <p className="channel-info-line">
+            <strong>Latency failure emails</strong>
+            <span>· only `latency-under` assertion failures</span>
+            <span className={`channel-count ${latencyCount === 0 ? "empty" : ""}`}>
+              {latencyCount} {latencyCount === 1 ? "recipient" : "recipients"}
+            </span>
+          </p>
+          <Field
+            label="Recipients"
+            hint="Only used when a failure was caused solely by a `latency-under` assertion. Leave empty to send latency failures to the General list."
+          >
+            <textarea
+              rows={5}
+              placeholder="perf-owners@example.com"
+              value={props.latencyFailureEmails}
+              onChange={(e) => props.onChangeLatency(e.target.value)}
+            />
+          </Field>
+        </>
+      )}
+    </>
+  );
+}
+
+function countRecipients(raw: string): number {
+  if (!raw) return 0;
+  return raw
+    .split(/[,;\n]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0).length;
+}
+
+// ----- Notifications panel: Slack + email recipients (general + latency) -
+function NotificationsPanel(
+  props: BaseProps & { project: Project; onClose: () => void }
+) {
+  // `?? ""` guards: if the backend hasn't shipped the new
+  // latency_failure_emails column yet (e.g. you forgot to restart `npm run dev`),
+  // `props.project.latencyFailureEmails` is undefined → without the fallback,
+  // .trim() throws at save time and silently swallows the WHOLE save.
+  const [slackWebhook, setSlackWebhook] = useState(
+    props.project.slackWebhookUrl ?? ""
+  );
+  const [notificationEmails, setNotificationEmails] = useState(
+    props.project.notificationEmails ?? ""
+  );
+  const [latencyFailureEmails, setLatencyFailureEmails] = useState(
+    props.project.latencyFailureEmails ?? ""
+  );
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Re-sync when the underlying project values change (after a save+refresh
+  // round-trip) — not just on project switch. Without this, a save would
+  // toast success but the textarea would keep showing the pre-save value.
+  useEffect(() => {
+    setSlackWebhook(props.project.slackWebhookUrl ?? "");
+    setNotificationEmails(props.project.notificationEmails ?? "");
+    setLatencyFailureEmails(props.project.latencyFailureEmails ?? "");
+  }, [
+    props.project.id,
+    props.project.slackWebhookUrl,
+    props.project.notificationEmails,
+    props.project.latencyFailureEmails,
+  ]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      const slackTrim = (slackWebhook ?? "").trim();
+      const notifTrim = (notificationEmails ?? "").trim();
+      const latencyTrim = (latencyFailureEmails ?? "").trim();
+
+      const updated = await updateProject(props.project.id, {
+        slackWebhookUrl: slackTrim,
+        notificationEmails: notifTrim,
+        latencyFailureEmails: latencyTrim,
+      });
+
+      // Verify the backend actually round-tripped what we sent. If the user
+      // is running a backend that was started BEFORE the latency_failure_emails
+      // column migration (Phase 1.27.2) — for example, an older `npm run dev`
+      // session that's still alive — the field is silently dropped at the SQL
+      // layer and `updated.latencyFailureEmails` comes back as an empty string
+      // even though save reported success. Catch that here so the user knows
+      // they need to restart the backend instead of staring at a vanishing
+      // textarea and assuming the frontend is broken.
+      const got = (updated.latencyFailureEmails ?? "").trim();
+      if (latencyTrim && got !== latencyTrim) {
+        throw new Error(
+          `Backend didn't persist the Latency emails field. Sent "${latencyTrim}" but received "${got}". ` +
+            `This almost always means the backend was started before the column migration ran. ` +
+            `Stop the backend (Ctrl+C in the backend terminal) and run "npm run dev" again.`
+        );
+      }
+
+      // Sync local state immediately from the server response, so we don't
+      // depend on the next 3-second poll catching up before the user navigates
+      // away. props re-flow on the next refresh will then be a no-op.
+      setSlackWebhook(updated.slackWebhookUrl ?? "");
+      setNotificationEmails(updated.notificationEmails ?? "");
+      setLatencyFailureEmails(updated.latencyFailureEmails ?? "");
+
+      await props.onDone("Notification settings saved");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="form" onSubmit={save}>
+      <h4 className="settings-panel-title">Notifications</h4>
+
       <Field
         label="Slack webhook URL"
         hint="Used for instant single-URL failure alerts + audit summaries. Leave empty to disable."
@@ -758,30 +1344,75 @@ export function SettingsForm(props: BaseProps & { project: Project }) {
         />
       </Field>
 
-      <h4 className="section-h">📧 Email notifications</h4>
-      <Field
-        label="Recipient emails"
-        hint="Comma, semicolon, or newline separated. Sends on URL/flow failures + Snapshot/Report button. SMTP must be configured in backend .env."
-      >
-        <textarea
-          rows={3}
-          placeholder="alice@example.com, bob@example.com"
-          value={notificationEmails}
-          onChange={(e) => setNotificationEmails(e.target.value)}
-        />
-      </Field>
+      <h4 className="section-h">📧 Email recipients</h4>
+
+      <ChannelPickerAndEditor
+        notificationEmails={notificationEmails}
+        latencyFailureEmails={latencyFailureEmails}
+        onChangeGeneral={setNotificationEmails}
+        onChangeLatency={setLatencyFailureEmails}
+      />
 
       {err && <div className="inline-error">{err}</div>}
 
       <div className="modal-actions">
-        <button type="button" className="ghost" onClick={() => props.onDone()}>
-          Cancel
+        <button type="button" className="ghost" onClick={props.onClose}>
+          Close
         </button>
         <button type="submit" className="primary" disabled={busy}>
           {busy ? "Saving…" : "Save"}
         </button>
       </div>
     </form>
+  );
+}
+
+// ----- Appearance panel: theme toggle ------------------------------------
+function AppearancePanel(props: { onClose: () => void }) {
+  const [pref, setPref, resolved] = useTheme();
+
+  const options: { value: ThemePref; icon: string; label: string; sub: string }[] = [
+    { value: "system", icon: "💻", label: "System", sub: "Follow OS preference" },
+    { value: "light", icon: "☀", label: "Light", sub: "Bright surfaces" },
+    { value: "dark", icon: "🌙", label: "Dark", sub: "Low-glare surfaces" },
+  ];
+
+  return (
+    <div className="form">
+      <h4 className="settings-panel-title">Appearance</h4>
+
+      <Field
+        label="Theme"
+        hint={
+          pref === "system"
+            ? `Following OS (currently ${resolved})`
+            : "Manual override — won't follow OS changes"
+        }
+      >
+        <div className="theme-picker">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className={`theme-option ${pref === o.value ? "active" : ""}`}
+              onClick={() => setPref(o.value)}
+            >
+              <span className="theme-option-icon" aria-hidden>
+                {o.icon}
+              </span>
+              <span className="theme-option-label">{o.label}</span>
+              <span className="theme-option-sub">{o.sub}</span>
+            </button>
+          ))}
+        </div>
+      </Field>
+
+      <div className="modal-actions">
+        <button type="button" className="primary" onClick={props.onClose}>
+          Done
+        </button>
+      </div>
+    </div>
   );
 }
 

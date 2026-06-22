@@ -26,6 +26,7 @@ interface Props {
   url: MonitoredUrl;
   project: Project;
   onCheck: () => void | Promise<void>;
+  onEdit?: () => void;
   onRemove: () => void | Promise<void>;
   // Optional pre-loaded values (so KpiBar can share data fetching)
   sparkline?: SparklinePoint[];
@@ -36,7 +37,7 @@ interface Props {
 }
 
 export function UrlCard(props: Props) {
-  const { url, project, onCheck, onRemove, refreshTick = 0, windowMinutes = 24 * 60 } = props;
+  const { url, project, onCheck, onEdit, onRemove, refreshTick = 0, windowMinutes = 24 * 60 } = props;
   const [checking, setChecking] = useState(false);
   const [history, setHistory] = useState<CheckRecord[]>(props.history ?? []);
   const [stats, setStats] = useState<UrlStats | null>(props.stats ?? null);
@@ -84,7 +85,15 @@ export function UrlCard(props: Props) {
               : "PENDING"}
           </span>
           <span className={`method-tag ${METHOD_COLOR[url.method] ?? "method-get"}`}>{url.method}</span>
-          <a className="url-link" href={url.url} target="_blank" rel="noreferrer">
+          <a
+            className="url-link"
+            href={safeHref(url.url)}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              if (safeHref(url.url) === "#") e.preventDefault();
+            }}
+          >
             {url.url}
           </a>
         </div>
@@ -99,6 +108,11 @@ export function UrlCard(props: Props) {
               "Check now"
             )}
           </button>
+          {onEdit && (
+            <button className="ghost small" onClick={onEdit} title="Edit this URL">
+              Edit
+            </button>
+          )}
           <button className="ghost destructive small" onClick={onRemove}>
             Remove
           </button>
@@ -149,6 +163,23 @@ export function UrlCard(props: Props) {
       </div>
     </div>
   );
+}
+
+/**
+ * Phase 1.27.9 — only return the URL as-is if it parses as http/https.
+ * Defends against future regressions where a `javascript:` / `data:` /
+ * `file:` URL slips past the create-time validator (e.g. via an OpenAPI
+ * import bug or a future patch). Renders a no-op `#` otherwise; the
+ * onClick handler also short-circuits navigation.
+ */
+function safeHref(raw: string): string {
+  try {
+    const u = new URL(raw);
+    if (u.protocol === "http:" || u.protocol === "https:") return raw;
+  } catch {
+    // fall through
+  }
+  return "#";
 }
 
 function assertionLabel(type: string): string {

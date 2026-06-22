@@ -68,6 +68,7 @@ export async function updateProject(
       | "description"
       | "slackWebhookUrl"
       | "notificationEmails"
+      | "latencyFailureEmails"
       | "prereqIntervalMinutes"
       | "prereqEnabled"
     >
@@ -170,6 +171,9 @@ export async function addUrl(
     assertions?: Assertion[];
     customHeaders?: KeyValue[];
     queryParams?: KeyValue[];
+    waitBeforeMs?: number;
+    maxRetries?: number;
+    retryBackoffMs?: number;
   }
 ): Promise<MonitoredUrl> {
   return jsonOrThrow(
@@ -195,6 +199,9 @@ export async function updateUrl(
     assertions: Assertion[];
     customHeaders: KeyValue[];
     queryParams: KeyValue[];
+    waitBeforeMs: number;
+    maxRetries: number;
+    retryBackoffMs: number;
   }>
 ): Promise<MonitoredUrl> {
   return jsonOrThrow(

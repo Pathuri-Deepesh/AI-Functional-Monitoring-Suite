@@ -1,8 +1,11 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import yaml from "js-yaml";
 import { mkdirSync, createReadStream, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { buildOpenAPISpec } from "./openapiExport.js";
 import {
   applyImport,
@@ -70,13 +73,80 @@ import {
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
+// Phase 1.27.9 — bind to loopback by default; explicit BACKEND_HOST=0.0.0.0
+// is required to expose on the LAN. Was the #1 deployment foot-gun: the log
+// line said "localhost" but Node was binding 0.0.0.0 silently.
+const HOST = process.env.BACKEND_HOST ?? "127.0.0.1";
 
 const REPORTS_DIR = resolve("./data/reports");
 mkdirSync(REPORTS_DIR, { recursive: true });
 
-app.use(cors());
+// Phase 1.27.9 — security headers. helmet() sets ~15 sensible defaults
+// (X-Content-Type-Options, X-Frame-Options DENY, Referrer-Policy, etc.).
+// CSP is intentionally disabled here because the dashboard uses inline
+// styles + Vite's HMR which CSP would block; the dashboard is loopback-only
+// dev surface, so the trade-off is acceptable. Add a CSP via reverse proxy
+// in production.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+
+// Phase 1.27.9 — tighten CORS to the frontend origin only (default
+// http://127.0.0.1:5173 + http://localhost:5173). Override via FRONTEND_ORIGIN
+// (comma-separated list) for LAN/production setups.
+const corsAllow = (process.env.FRONTEND_ORIGIN ??
+  "http://127.0.0.1:5173,http://localhost:5173"
+)
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // Same-origin / curl / native requests have no Origin header — allow.
+      if (!origin) return cb(null, true);
+      return cb(null, corsAllow.includes(origin));
+    },
+    credentials: true,
+  })
+);
+
+// Phase 1.27.9 — generous global rate limit. 600/min won't trip the 3s
+// frontend polling (max ~20/min from one tab × a handful of tabs). Hot-path
+// mutations get tighter caps further down. Skip loopback so the local UI
+// is never throttled.
+const skipLoopback = (req: express.Request) =>
+  req.ip === "127.0.0.1" || req.ip === "::1" || req.ip === "::ffff:127.0.0.1";
+
+app.use(
+  rateLimit({
+    windowMs: 60_000,
+    limit: 600,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    skip: skipLoopback,
+  })
+);
+
+const mutationLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 30,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  skip: skipLoopback,
+});
+
 app.use(express.json({ limit: "1mb" }));
 app.use("/reports", express.static(REPORTS_DIR));
+
+// Phase 1.27.9 — sanitize error responses. Generic message to the client,
+// full detail to the server log with a request-id the user can quote back.
+function sendError(res: express.Response, status: number, e: unknown, label = "Request failed") {
+  const id = randomUUID().slice(0, 8);
+  // eslint-disable-next-line no-console
+  console.warn(`[err ${id}]`, label, e);
+  const detail =
+    process.env.NODE_ENV === "development" && e instanceof Error ? `: ${e.message}` : "";
+  res.status(status).json({ error: `${label}${detail}`, requestId: id });
+}
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "monitoring-backend" });
@@ -91,7 +161,7 @@ app.get("/api/projects", (_req, res) => {
   res.json(listProjects());
 });
 
-app.post("/api/projects", (req, res) => {
+app.post("/api/projects", mutationLimiter, (req, res) => {
   const { name, description, slackWebhookUrl, notificationEmails } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
@@ -819,8 +889,41 @@ app.get("/api/projects/:projectId/uploads", (req, res) => {
   res.json(listUploadsByProject(req.params.projectId));
 });
 
+// Phase 1.27.9 — permissive MIME allowlist. Covers everything the BinaryBodyEditor
+// realistically uploads (images, PDFs, JSON, text, common archives, video/audio
+// samples). Anything outside this set is rejected at the gate.
+const ALLOWED_UPLOAD_MIME_PREFIXES = [
+  "image/",
+  "video/",
+  "audio/",
+  "text/",
+  "font/",
+];
+const ALLOWED_UPLOAD_MIME_EXACT = new Set([
+  "application/pdf",
+  "application/json",
+  "application/xml",
+  "application/x-yaml",
+  "application/yaml",
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-tar",
+  "application/gzip",
+  "application/x-gzip",
+  "application/x-7z-compressed",
+  "application/octet-stream", // generic binary — needed for arbitrary form-data uploads
+  "application/javascript",
+  "application/x-www-form-urlencoded",
+]);
+function isAllowedMime(m: string): boolean {
+  const norm = m.toLowerCase().split(";")[0].trim();
+  if (ALLOWED_UPLOAD_MIME_EXACT.has(norm)) return true;
+  return ALLOWED_UPLOAD_MIME_PREFIXES.some((p) => norm.startsWith(p));
+}
+
 app.post(
   "/api/projects/:projectId/uploads",
+  mutationLimiter,
   express.raw({ type: "*/*", limit: MAX_UPLOAD_BYTES }),
   (req, res) => {
     if (!getProject(req.params.projectId)) {
@@ -839,7 +942,19 @@ app.post(
     } catch {
       // not URL-encoded — use raw
     }
+    // Phase 1.27.9 — strip path-traversal characters from filename. Even though
+    // the disk key is a UUID (so path traversal via filename is structurally
+    // impossible), don't let `../` end up in the download Content-Disposition
+    // header that gets sent back as `filename=`.
+    filename = filename.replace(/[\\/]/g, "_").replace(/\.\.+/g, "_").slice(0, 255) || "upload";
+
     const mimeType = String(req.header("content-type") || "application/octet-stream");
+    if (!isAllowedMime(mimeType)) {
+      res.status(415).json({
+        error: `MIME type "${mimeType}" not permitted. Allowed: image/*, video/*, audio/*, text/*, font/*, pdf, json, xml, yaml, zip, tar, gzip, 7z, octet-stream, javascript.`,
+      });
+      return;
+    }
     try {
       const upload = createUpload({
         projectId: req.params.projectId,
@@ -850,7 +965,7 @@ app.post(
       writeFileSync(uploadPath(upload.id), buf);
       res.status(201).json(upload);
     } catch (e) {
-      res.status(400).json({ error: e instanceof Error ? e.message : String(e) });
+      sendError(res, 400, e, "Upload failed");
     }
   }
 );
@@ -889,8 +1004,57 @@ app.delete("/api/uploads/:id", (req, res) => {
   res.status(204).end();
 });
 
+// ===========================================================================
+// Phase 1.27.10 — single-origin deployment.
+// Serve the built frontend (frontend/dist/ → copied to backend/public/) from
+// the same Express process as the API. In dev, the public/ folder is usually
+// absent and `npm run dev` keeps Vite on port 5173 with its proxy — this block
+// is essentially a no-op until `npm run build` populates public/. Order is
+// important: ALL /api/* and /reports/ routes are registered above; the static
+// + SPA fallback below only get hit by anything that didn't match those.
+// ===========================================================================
+const PUBLIC_DIR = resolve("./public");
+try {
+  statSync(PUBLIC_DIR);
+  // Static asset serving — index.html, /assets/*.js + .css, favicons, etc.
+  app.use(
+    express.static(PUBLIC_DIR, {
+      // Don't cache index.html so dashboard updates land on next refresh.
+      // The /assets/* files have content-hashed names so they can cache long.
+      setHeaders(res, filePath) {
+        if (filePath.endsWith("index.html")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        } else if (/\.(?:js|css|woff2?|ttf|png|jpg|jpeg|svg|webp)$/i.test(filePath)) {
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+      },
+    })
+  );
+
+  // SPA fallback — any GET that isn't an API/report path and doesn't look like
+  // a missing asset (no file extension) returns index.html so client-side
+  // routes (#settings, #urls, #flows) survive a hard refresh.
+  app.use((req, res, next) => {
+    if (req.method !== "GET") return next();
+    if (req.path.startsWith("/api/") || req.path.startsWith("/reports/")) return next();
+    // Has an extension? Probably a real asset request — let Express 404 it
+    // naturally instead of returning an HTML page for a missing .js file.
+    if (/\.[a-z0-9]+$/i.test(req.path)) return next();
+    res.sendFile(resolve(PUBLIC_DIR, "index.html"));
+  });
+
+  console.log(`[monitoring-backend] serving frontend from ${PUBLIC_DIR}`);
+} catch {
+  // public/ doesn't exist yet — this is the dev case. The Vite dev server on
+  // 5173 handles the UI; this Express process is API-only.
+  console.log(
+    `[monitoring-backend] no frontend build at ${PUBLIC_DIR} — run "npm run build" at the repo root to bundle the UI into this server`
+  );
+}
+
 startMonitorLoop();
 
-app.listen(PORT, () => {
-  console.log(`[monitoring-backend] listening on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  // Now the log line tells the truth instead of always claiming "localhost".
+  console.log(`[monitoring-backend] listening on http://${HOST}:${PORT}`);
 });

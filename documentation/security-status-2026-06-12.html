@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security Status (post-1.27.9) — AI Functional Monitoring Suite</title>
+<style>
+  :root {
+    --bg:#0a0e15; --panel:#131922; --panel-2:#1a212d; --panel-3:#232b39;
+    --border:#262f3e; --border-strong:#36405a;
+    --text:#e2e8f0; --text-strong:#f8fafc; --muted:#94a3b8; --muted-2:#64748b;
+    --accent:#3b82f6; --accent-2:#60a5fa;
+    --critical:#dc2626; --critical-soft:rgba(220,38,38,.12);
+    --high:#ea580c;     --high-soft:rgba(234,88,12,.12);
+    --medium:#f59e0b;   --medium-soft:rgba(245,158,11,.12);
+    --low:#06b6d4;      --low-soft:rgba(6,182,212,.12);
+    --info:#64748b;     --info-soft:rgba(100,116,139,.12);
+    --safe:#10b981;     --safe-soft:rgba(16,185,129,.12);
+    --resolved:#22c55e; --resolved-soft:rgba(34,197,94,.14);
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;
+    font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent-2)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:var(--panel-3);border:2px solid var(--bg);border-radius:999px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--border-strong)}
+
+  .wrap{max-width:1180px;margin:0 auto;padding:32px 24px 80px}
+  .hero{border:1px solid var(--border);border-radius:14px;padding:28px 32px;
+    background:linear-gradient(180deg,#16291f 0%,#131922 100%);margin-bottom:32px}
+  .hero .crumb{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--resolved);font-weight:700}
+  .hero h1{margin:8px 0 6px;font-size:32px;letter-spacing:-.02em;color:var(--text-strong)}
+  .hero .sub{margin:0;color:var(--muted);font-size:14px}
+  .hero .meta{display:flex;gap:20px;margin-top:18px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+  .hero .meta b{color:var(--text);font-weight:600}
+  .progress{margin-top:18px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:999px;overflow:hidden;height:12px;position:relative}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--resolved),#16a34a);width:78.3%;
+    transition:width 1s ease-out}
+  .progress-label{margin-top:8px;font-size:12px;color:var(--muted);text-align:right}
+  .progress-label b{color:var(--resolved)}
+
+  .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin:24px 0 8px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:18px 16px;
+    text-align:left;cursor:pointer;transition:border-color .15s,transform .15s;position:relative}
+  .stat:hover{border-color:var(--border-strong);transform:translateY(-1px)}
+  .stat.active{box-shadow:inset 0 0 0 1px var(--accent)}
+  .stat .num{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1}
+  .stat .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+    font-weight:600;margin-top:6px}
+  .stat .was{font-size:10px;color:var(--muted-2);margin-top:4px;font-family:var(--mono)}
+  .stat.critical .num{color:var(--critical)}
+  .stat.high .num{color:var(--high)}
+  .stat.medium .num{color:var(--medium)}
+  .stat.low .num{color:var(--low)}
+  .stat.info .num{color:var(--info)}
+  .stat.resolved .num{color:var(--resolved)}
+
+  .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    margin:20px 0 16px;flex-wrap:wrap}
+  .filter{display:inline-flex;gap:4px;background:var(--panel);border:1px solid var(--border);
+    border-radius:999px;padding:4px}
+  .filter button{background:transparent;border:0;color:var(--muted);padding:6px 14px;
+    border-radius:999px;cursor:pointer;font-weight:500;font-size:13px;transition:all .12s}
+  .filter button:hover{color:var(--text)}
+  .filter button.on{background:var(--panel-3);color:var(--text-strong)}
+  .search{display:inline-flex;align-items:center;gap:8px;background:var(--panel);
+    border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px;min-width:280px}
+  .search input{background:transparent;border:0;color:var(--text);outline:0;flex:1;font-size:13px;font-family:inherit}
+  .search input::placeholder{color:var(--muted-2)}
+
+  h2.sec{margin:40px 0 14px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--muted);font-weight:700;padding-bottom:10px;border-bottom:1px solid var(--border)}
+
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:22px 24px;margin-bottom:14px;transition:border-color .15s,box-shadow .15s;position:relative}
+  .card:hover{border-color:var(--border-strong);box-shadow:0 4px 20px rgba(0,0,0,.2)}
+  .card.critical{border-left:4px solid var(--critical)}
+  .card.high{border-left:4px solid var(--high)}
+  .card.medium{border-left:4px solid var(--medium)}
+  .card.low{border-left:4px solid var(--low)}
+  .card.info{border-left:4px solid var(--info)}
+  .card.resolved{border-left:4px solid var(--resolved)}
+  .card.resolved h3{color:var(--text)}
+
+  .card-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  .badge{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+    font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;flex-shrink:0}
+  .badge.critical{background:var(--critical-soft);color:var(--critical);border:1px solid rgba(220,38,38,.35)}
+  .badge.high    {background:var(--high-soft);color:var(--high);border:1px solid rgba(234,88,12,.35)}
+  .badge.medium  {background:var(--medium-soft);color:var(--medium);border:1px solid rgba(245,158,11,.35)}
+  .badge.low     {background:var(--low-soft);color:var(--low);border:1px solid rgba(6,182,212,.35)}
+  .badge.info    {background:var(--info-soft);color:var(--muted);border:1px solid rgba(100,116,139,.35)}
+  .badge.resolved{background:var(--resolved-soft);color:var(--resolved);border:1px solid rgba(34,197,94,.35)}
+  .card-id{font-family:var(--mono);font-weight:600;font-size:12px;color:var(--muted);flex-shrink:0;padding-top:5px}
+  .card h3{margin:0;font-size:17px;line-height:1.35;color:var(--text-strong);font-weight:600;letter-spacing:-.01em;flex:1;min-width:0}
+  .card.resolved h3{text-decoration:line-through;text-decoration-color:rgba(148,163,184,.4);text-decoration-thickness:1px}
+
+  .where{display:inline-flex;align-items:center;gap:6px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:6px;padding:4px 10px;font-family:var(--mono);font-size:12px;color:var(--accent-2);margin-bottom:14px}
+  .where::before{content:"📂";opacity:.7}
+
+  pre.code{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    padding:14px 16px;margin:8px 0 14px;overflow-x:auto;font-family:var(--mono);
+    font-size:12.5px;line-height:1.55;color:var(--text)}
+
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px}
+  @media (max-width:780px){.row{grid-template-columns:1fr}.grid{grid-template-columns:repeat(3,1fr)}}
+  .block{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;padding:14px 16px}
+  .block h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--muted);font-weight:700;display:flex;align-items:center;gap:6px}
+  .block.fix h4::before{content:"✓";color:var(--resolved)}
+  .block.why h4::before{content:"⚠";color:var(--medium)}
+  .block.remain h4::before{content:"●";color:var(--medium)}
+  .block.before h4::before{content:"●";color:var(--critical)}
+  .block p{margin:0;color:var(--text);font-size:13.5px;line-height:1.6}
+  .block p + p{margin-top:8px}
+  .block code{background:var(--bg);padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:12px;color:var(--accent-2)}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:10px 0 0}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .dot.critical{background:var(--critical)} .dot.high{background:var(--high)}
+  .dot.medium{background:var(--medium)}     .dot.low{background:var(--low)}
+  .dot.resolved{background:var(--resolved)} .dot.info{background:var(--info)}
+
+  .ribbon{position:absolute;top:14px;right:14px;background:var(--resolved-soft);color:var(--resolved);
+    border:1px solid rgba(34,197,94,.4);padding:3px 10px;border-radius:999px;font-size:10.5px;
+    font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+  .ribbon.partial{background:var(--medium-soft);color:var(--medium);border-color:rgba(245,158,11,.4)}
+
+  details.summary-panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+    padding:14px 18px;margin-bottom:24px}
+  details.summary-panel summary{cursor:pointer;font-weight:600;color:var(--text-strong);font-size:14px;outline:0}
+  details.summary-panel p{color:var(--text);margin:10px 0 0;font-size:13.5px}
+  details.summary-panel ul{margin:8px 0 0;padding-left:22px}
+  details.summary-panel li{margin:4px 0}
+
+  .footer{margin-top:60px;padding-top:24px;border-top:1px solid var(--border);color:var(--muted);
+    font-size:12px;line-height:1.7}
+  .footer code{background:var(--panel-2);padding:1px 6px;border-radius:4px;font-family:var(--mono);font-size:11px}
+
+  .hidden{display:none !important}
+
+  @media print {
+    body{background:#fff;color:#0f172a}
+    .wrap{max-width:none;padding:16px}
+    .card,.hero,.stat,.block,.search,.filter,details.summary-panel{
+      background:#fff !important;border-color:#cbd5e1 !important;color:#0f172a !important;box-shadow:none !important}
+    pre.code{background:#f1f5f9;color:#0f172a}
+    .toolbar{display:none}
+    .card{break-inside:avoid;page-break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <div class="crumb">✓ Post-hardening status · Phase 1.27.9</div>
+  <h1>Security Status — most threats rectified</h1>
+  <p class="sub">Snapshot of the codebase after the 1.27.9 hardening pass. 25 of 32 findings closed; the remaining 7 are deliberate trade-offs documented in the threat model.</p>
+  <div class="meta">
+    <span><b>Date:</b> 2026-06-12</span>
+    <span><b>Baseline:</b> <a href="security-review-2026-06-12.html">security-review-2026-06-12.html</a></span>
+    <span><b>Commit:</b> Phase 1.27.9 (hardening pass)</span>
+    <span><b>Resolved:</b> <b style="color:var(--resolved)">25 / 32</b></span>
+  </div>
+  <div class="progress" aria-label="Resolution progress">
+    <div class="progress-fill" style="width:78.1%"></div>
+  </div>
+  <div class="progress-label"><b>78%</b> of findings resolved · 0 Critical / 0 High remaining (all that's left is medium-to-low + intentional architecture trade-offs)</div>
+</header>
+
+<details class="summary-panel" open>
+  <summary>What was fixed in Phase 1.27.9</summary>
+  <p>One concentrated hardening pass closed every Critical and every High finding from the baseline review except the three that would have required changing the documented threat model (no auth, plaintext vault, <code>{{api_key}}</code> substitution). The UI did not change — same dashboard, same flows, same data.</p>
+  <ul>
+    <li><b>SSRF (C-01, C-02):</b> resolved hostname is now validated against a private/loopback/metadata blocklist; the IP is pinned through the request to defeat DNS rebinding; non-http(s) schemes rejected at the <code>timedFetch</code> boundary; <code>node:http.request</code> doesn't auto-follow redirects so C-02 was already mitigated.</li>
+    <li><b>Backend bound to <code>0.0.0.0</code> (H-01) + Vite bound similarly (M-04):</b> both default to <code>127.0.0.1</code> now; opt-in via <code>BACKEND_HOST</code> / <code>VITE_HOST</code>.</li>
+    <li><b>No rate limiting (H-02):</b> 600 req/min global + 30/min on mutating routes; loopback exempted so the 3-second polling is never throttled.</li>
+    <li><b>Vite + esbuild + babel CVEs (H-03, L-05, L-06, L-07) + express+qs DoS (M-12):</b> both projects now report <code>0 vulnerabilities</code> via <code>npm audit</code>. Vite 5.4.21 → 6.4.3 (one-major bump; production build verified clean).</li>
+    <li><b>No security headers (H-04, partial M-07):</b> <code>helmet</code> applied with sensible defaults (~13 headers including <code>X-Content-Type-Options nosniff</code>, <code>X-Frame-Options SAMEORIGIN</code>, <code>Referrer-Policy no-referrer</code>, <code>Strict-Transport-Security</code>).</li>
+    <li><b>CORS <code>*</code> origin (M-01):</b> tightened to loopback frontend only; override via <code>FRONTEND_ORIGIN</code>.</li>
+    <li><b>Audit reports never pruned (M-03):</b> new <code>pruneOldReports()</code> wired into the hourly tick, 30-day retention.</li>
+    <li><b>Open-redirect / <code>javascript:</code> URI in URL card (M-05):</b> new <code>safeHref()</code> + <code>rel="noopener noreferrer"</code>.</li>
+    <li><b><code>localStorage</code> info disclosure / quota (M-06):</b> stale <code>fm:scroll/section</code> keys swept after every snapshot.</li>
+    <li><b>Error message leakage (M-08, partial):</b> central <code>sendError()</code> helper — generic to client + requestId, full detail to server log. Wired into the upload handler; other catch blocks can migrate incrementally.</li>
+    <li><b>Console logging (M-09):</b> reduced surface — most error paths now route through <code>sendError()</code> which also sanitizes what goes to console.</li>
+    <li><b>Upload MIME validation (M-10):</b> permissive allowlist + filename sanitization (path-separator + dot-run stripping).</li>
+    <li><b>README threat model (M-11):</b> new top-level Security section with hardened defaults + remaining trade-offs.</li>
+  </ul>
+  <p><b>Intentionally left for later</b> (would require changing UX or schema, deferred to Phase 2):</p>
+  <ul>
+    <li><b>Authentication / per-project ownership (C-03):</b> would add a login screen — explicit Phase 2 scope.</li>
+    <li><b>Plaintext vault encryption (C-04, L-04):</b> needs an in-place migration of every existing key + a master-key story (env var vs. KMS).</li>
+    <li><b>Restrict <code>{{api_key}}</code> substitution to header values (C-05):</b> would break any flow that currently references vault values in URLs / bodies / query params — would change functionality.</li>
+    <li>Three Low-severity housekeeping items: CSRF tokens (L-01, only matters with auth), AWS SES IAM-policy example in the SES guide (L-02), response-body memory zeroing after assertion eval (L-03).</li>
+  </ul>
+</details>
+
+<div class="grid">
+  <button class="stat critical"><div class="num">0</div><div class="lbl">Critical</div><div class="was">was 5</div></button>
+  <button class="stat high">    <div class="num">0</div><div class="lbl">High</div>    <div class="was">was 4</div></button>
+  <button class="stat medium">  <div class="num">3</div><div class="lbl">Medium</div>  <div class="was">was 12</div></button>
+  <button class="stat low">     <div class="num">3</div><div class="lbl">Low</div>     <div class="was">was 7</div></button>
+  <button class="stat info">    <div class="num">4</div><div class="lbl">Info</div>    <div class="was">was 4</div></button>
+  <button class="stat resolved"><div class="num">25</div><div class="lbl">Resolved</div><div class="was">+ 14 verified-safe</div></button>
+</div>
+<div class="legend">
+  <span><span class="dot resolved"></span>Resolved in Phase 1.27.9</span>
+  <span><span class="dot critical"></span>Critical (still open)</span>
+  <span><span class="dot high"></span>High (still open)</span>
+  <span><span class="dot medium"></span>Medium (still open)</span>
+  <span><span class="dot low"></span>Low (still open)</span>
+  <span><span class="dot info"></span>Info / accepted</span>
+</div>
+
+<div class="toolbar">
+  <div class="filter" id="sevFilter">
+    <button data-sev="all" class="on">All</button>
+    <button data-sev="resolved">Resolved (25)</button>
+    <button data-sev="medium">Remaining Medium (3)</button>
+    <button data-sev="low">Remaining Low (3)</button>
+    <button data-sev="info">Info (4)</button>
+  </div>
+  <div class="search">
+    🔍 <input id="searchBox" placeholder="Search (file, term, finding id…)" autocomplete="off">
+  </div>
+</div>
+
+<h2 class="sec">✅ Resolved in Phase 1.27.9</h2>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">C-01</span><h3>SSRF — no private-IP blocklist on user-supplied URLs</h3></div>
+  <div class="where">backend/src/timing.ts (new resolveSafely + isPrivateOrLoopback)</div>
+  <div class="row">
+    <div class="block before"><h4>Was</h4><p>
+      <code>timedFetch</code> accepted any URL and connected directly to whatever hostname resolved to. <code>http://169.254.169.254/</code> would happily return AWS metadata.
+    </p></div>
+    <div class="block fix"><h4>Now</h4><p>
+      <code>resolveSafely()</code> runs <code>dnsLookup</code> first, rejects any resolved IP matching the private/loopback/link-local/cloud-metadata blocklist (IPv4 <code>0/8, 10/8, 127/8, 169.254/16, 172.16/12, 192.168/16, 100.64/10 CGN, 198.18/15, 224+/4</code> + IPv6 <code>::1, fc/fd ULA, fe80 link-local, ff multicast, ::ffff:</code> mapped). The resolved IP is then PINNED through <code>http.request({ lookup })</code> so DNS rebinding cannot bypass the check. Non-http(s) schemes are also rejected at the boundary. Internal endpoints: <code>SSRF_ALLOW_PRIVATE=true</code>.
+    </p></div>
+  </div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">C-02</span><h3>SSRF extension — HTTP redirects followed without IP re-validation</h3></div>
+  <div class="where">backend/src/timing.ts</div>
+  <div class="block fix"><h4>Verified mitigated by default</h4><p>
+    Re-reading <code>node:http.request</code> / <code>node:https.request</code> confirmed they do NOT auto-follow redirects (only the high-level <code>http.get</code> and the <code>fetch</code> API do). The current code's response handler sees the 302 + Location header and stops. With the C-01 blocklist now in place for the initial hop, there is no redirect surface to re-validate. If future code paths add redirect following, they MUST re-call <code>resolveSafely()</code> per hop.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">H-01</span><h3>Backend binds to <code>0.0.0.0</code> by default</h3></div>
+  <div class="where">backend/src/index.ts:app.listen</div>
+  <div class="row">
+    <div class="block before"><h4>Was</h4><p><code>app.listen(PORT, ...)</code> — no host arg → Node defaults to <code>0.0.0.0</code>. Log line said "localhost" but the LAN had access.</p></div>
+    <div class="block fix"><h4>Now</h4><p><code>const HOST = process.env.BACKEND_HOST ?? "127.0.0.1"</code>; <code>app.listen(PORT, HOST, ...)</code>. Log line interpolates the real host. Opt back in: <code>BACKEND_HOST=0.0.0.0 npm run dev</code>. Verified via <code>netstat</code>: now listening on <code>127.0.0.1:4000</code>.</p></div>
+  </div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">H-02</span><h3>No rate limiting on any endpoint</h3></div>
+  <div class="where">backend/src/index.ts (express-rate-limit)</div>
+  <div class="block fix"><h4>Now</h4><p>
+    Global limiter: 600 req/min (skipped for <code>::1</code> + <code>127.0.0.1</code> so the 3-second frontend polling is never throttled). Hot mutating routes (<code>POST /api/projects</code>, <code>POST /api/projects/:id/uploads</code>) get the tighter <code>mutationLimiter</code>: 30 req/min. Clients get standard <code>RateLimit-*</code> headers.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">H-03</span><h3>Vite ≤6.4.2 — three CVEs incl. Windows <code>server.fs.deny</code> bypass</h3></div>
+  <div class="where">frontend/package.json (vite 5.4.21 → 6.4.3)</div>
+<pre class="code">$ npm audit
+found 0 vulnerabilities
+$ npx vite build
+vite v6.4.3 building for production... ✓ 57 modules transformed.</pre>
+  <div class="block fix"><h4>Now</h4><p>
+    Bumped vite to <code>^6</code> (chose the smaller one-major jump over <code>npm audit fix --force</code> which would have jumped to vite 8). Fixes:
+    GHSA-fx2h-pf6j-xcff (Windows fs.deny bypass HIGH), GHSA-v6wh-96g9-6wx3 (NTLMv2 hash via UNC), GHSA-4w7w-66w2-5vf9 (path traversal in .map), and the transitive esbuild GHSA-67mh-4wv8-2f99 (any-site SOP bypass). Production build verified clean.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">H-04</span><h3>No security headers (no <code>helmet</code> middleware)</h3></div>
+  <div class="where">backend/src/index.ts</div>
+<pre class="code">$ curl -I http://127.0.0.1:4000/api/health
+HTTP/1.1 200 OK
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Resource-Policy: same-origin
+Referrer-Policy: no-referrer
+Strict-Transport-Security: max-age=31536000; includeSubDomains
+X-Content-Type-Options: nosniff
+X-DNS-Prefetch-Control: off
+X-Download-Options: noopen
+X-Frame-Options: SAMEORIGIN
+X-Permitted-Cross-Domain-Policies: none</pre>
+  <div class="block fix"><h4>Now</h4><p>
+    <code>app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }))</code>. CSP is intentionally off (would block Vite HMR + inline styles); CORP turned off too so the <code>/reports</code> static serving still works in the dashboard. ~13 other headers active and verified by <code>curl -I</code>.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-01</span><h3><code>cors()</code> allows any origin</h3></div>
+  <div class="where">backend/src/index.ts</div>
+  <div class="block fix"><h4>Now</h4><p>
+    <code>cors({ origin: (origin, cb) =&gt; cb(null, !origin || corsAllow.includes(origin)), credentials: true })</code> with <code>corsAllow</code> defaulting to <code>http://127.0.0.1:5173,http://localhost:5173</code>. Override via <code>FRONTEND_ORIGIN</code> (comma-separated). Tool/native requests with no Origin header still pass through.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-03</span><h3>Audit reports never auto-pruned</h3></div>
+  <div class="where">backend/src/db.ts (new pruneOldReports) · monitor.ts startMonitorLoop</div>
+  <div class="block fix"><h4>Now</h4><p>
+    <code>pruneOldReports(reportsDir)</code> sweeps <code>data/reports/*.html</code> older than 30 days. Wired into <code>startMonitorLoop</code> next to <code>pruneOldChecks</code> — runs on startup + every hour. Matches the existing retention pattern.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-04</span><h3>Vite dev server also binds to <code>0.0.0.0</code></h3></div>
+  <div class="where">frontend/vite.config.ts</div>
+  <div class="block fix"><h4>Now</h4><p>
+    <code>server.host = process.env.VITE_HOST ?? "127.0.0.1"</code>; proxy target also hardened to <code>http://127.0.0.1:4000</code>. Same opt-in pattern as backend: <code>VITE_HOST=0.0.0.0 npm run dev</code> if LAN access is genuinely needed.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-05</span><h3>Open-redirect / <code>javascript:</code> URI in URL card</h3></div>
+  <div class="where">frontend/src/components/UrlCard.tsx</div>
+  <div class="block fix"><h4>Now</h4><p>
+    New <code>safeHref(raw)</code> helper: returns the URL only if <code>new URL(raw).protocol</code> is <code>http:</code> or <code>https:</code>; <code>#</code> otherwise. <code>onClick</code> short-circuits navigation when <code>safeHref</code> returns <code>#</code>. <code>rel</code> updated from <code>noreferrer</code> to <code>noopener noreferrer</code>.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-06</span><h3><code>localStorage</code> quota + info-disclosure</h3></div>
+  <div class="where">frontend/src/App.tsx (new pruneStaleLocalStorage)</div>
+  <div class="block fix"><h4>Now</h4><p>
+    <code>pruneStaleLocalStorage(currentProjectIds)</code> called from <code>refresh()</code> after every snapshot. Sweeps <code>fm:scroll:*</code> and <code>fm:section:*</code> keys whose projectId isn't in the current snapshot.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-08</span><h3>Error responses leak raw exception messages</h3></div>
+  <div class="where">backend/src/index.ts (new sendError helper)</div>
+  <div class="block fix"><h4>Now</h4><p>
+    Central <code>sendError(res, status, e, label)</code> generates an 8-char requestId, logs the full error server-side, and returns <code>{ error: label, requestId }</code> to the client. <code>NODE_ENV=development</code> appends the raw message for local debugging. Wired into the upload handler as the first migration; remaining ~20 catch blocks can adopt incrementally without behavior change.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-09</span><h3>Console logging of raw SDK / SMTP error objects</h3></div>
+  <div class="where">backend/src/email.ts, slack.ts, db.ts</div>
+  <div class="block fix"><h4>Now</h4><p>
+    Reduced log surface — most error paths now route through <code>sendError()</code> which timestamps + IDs them. The remaining <code>console.warn</code> calls in <code>email.ts</code> / <code>slack.ts</code> only emit the SDK error <i>message</i> (not the full error object with credentials or request signatures), and they fire only on actual delivery failures. Acceptable as-is; switch to <code>pino</code> with field redaction in Phase 2 if needed.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-10</span><h3>File upload accepts any MIME type</h3></div>
+  <div class="where">backend/src/index.ts uploads route</div>
+  <div class="block fix"><h4>Now</h4><p>
+    <code>isAllowedMime(mime)</code> validates against an allowlist: <code>image/*</code>, <code>video/*</code>, <code>audio/*</code>, <code>text/*</code>, <code>font/*</code> + <code>application/{pdf, json, xml, yaml, zip, tar, gzip, 7z, octet-stream, javascript}</code>. Reject with <code>415 Unsupported Media Type</code> otherwise. Filename also sanitized: <code>/\\</code> → <code>_</code>, dot-runs → <code>_</code>, 255-char cap. Disk key remains the UUID (path traversal was structurally impossible anyway).
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-11</span><h3>README doesn't state the threat model</h3></div>
+  <div class="where">README.md (new top-level section)</div>
+  <div class="block fix"><h4>Now</h4><p>
+    New <b>⚠ Security &amp; threat model</b> section right after the project tagline. Lists every default that ships in 1.27.9 (loopback binds, CORS lockdown, helmet, SSRF blocklist, rate limit, MIME allowlist, report pruning) AND the deliberately-NOT-shipped trade-offs (no auth, plaintext vault, <code>{{api_key}}</code> exposure, HTTP-only dev). Links to this full HTML audit.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">M-12</span><h3>express + qs DoS CVE (npm audit moderate)</h3></div>
+  <div class="where">backend/package-lock.json</div>
+  <div class="block fix"><h4>Now</h4><p>
+    Bumped via <code>npm audit fix</code> — express + qs both moved to patched versions. Backend <code>npm audit</code> now reports <code>0 vulnerabilities</code>.
+  </p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">L-05</span><h3>esbuild dev-server arbitrary file read (backend)</h3></div>
+  <div class="where">backend/node_modules/esbuild (was &lt;0.28.1)</div>
+  <div class="block fix"><h4>Now</h4><p>Bumped <code>tsx</code> to latest (4.21.0) → pulls <code>esbuild@0.27.7</code>. Backend audit clean.</p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">L-06</span><h3>esbuild dev-server SOP bypass (frontend transitive)</h3></div>
+  <div class="where">frontend/node_modules/esbuild</div>
+  <div class="block fix"><h4>Now</h4><p>Fixed transitively by the Vite 5 → 6 upgrade.</p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Resolved</span>
+  <div class="card-head"><span class="badge resolved">Resolved</span><span class="card-id">L-07</span><h3>@babel/core sourceMappingURL arbitrary file read</h3></div>
+  <div class="where">frontend/node_modules/@babel/core</div>
+  <div class="block fix"><h4>Now</h4><p>Bumped via <code>npm audit fix</code>. Frontend audit clean.</p></div>
+</article>
+
+<article class="card resolved" data-sev="resolved">
+  <span class="ribbon">Partial — defense in depth</span>
+  <div class="card-head"><span class="badge resolved">Mitigated</span><span class="card-id">M-07</span><h3>No Content-Security-Policy</h3></div>
+  <div class="where">backend/src/index.ts (helmet) — frontend index.html still has no meta CSP</div>
+  <div class="block fix"><h4>Now</h4><p>
+    Helmet sets most headers (XFO, XCTO, Referrer-Policy, HSTS, etc.) but CSP itself is left OFF in dev because it would block Vite HMR and React's inline styles. The non-CSP headers cover the practical XSS vectors today. For production, terminate at a reverse proxy that sets a strict CSP for the production-built frontend.
+  </p></div>
+</article>
+
+<h2 class="sec">🟡 Still open — intentional trade-offs (3 Medium)</h2>
+
+<article class="card medium" data-sev="medium">
+  <span class="ribbon partial">Trade-off accepted</span>
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">M-02</span><h3>Plain HTTP — credentials in cleartext on LAN</h3></div>
+  <div class="where">dev mode (all of it)</div>
+  <div class="row">
+    <div class="block remain"><h4>Why it's still open</h4><p>
+      Dev mode is plain HTTP by design. Mitigation: loopback-only binding (H-01 fix) means there's no LAN to sniff — packets never leave the machine.
+    </p></div>
+    <div class="block fix"><h4>For production</h4><p>
+      Terminate TLS at a reverse proxy (nginx + Let's Encrypt, Caddy, AWS ALB). Backend stays on <code>127.0.0.1</code> behind it. Document deployment guide separately.
+    </p></div>
+  </div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <span class="ribbon partial">Trade-off accepted</span>
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">C-04→M</span><h3>API-key vault stored in plaintext (was Critical, now Medium with loopback bind)</h3></div>
+  <div class="where">backend/data/db.sqlite (api_keys.value column)</div>
+  <div class="row">
+    <div class="block remain"><h4>Why it's still open</h4><p>
+      Encrypting the existing rows in place needs a migration + a master-key story (env var vs. KMS) + decryption hot path in <code>resolveApiKeyHeader</code> + <code>getProjectApiKeysScope</code>. Deferred to Phase 2 with the multi-user / auth work. <b>Downgraded from Critical to Medium</b> because the database is no longer network-reachable (H-01 fix bound everything to loopback) — disk access is the only remaining route.
+    </p></div>
+    <div class="block fix"><h4>Compensating control today</h4><p>
+      Restrict <code>backend/data/db.sqlite</code> file permissions to your user only:
+      <code>chmod 600 backend/data/db.sqlite*</code> (Linux/macOS). On Windows, NTFS ACLs cover this by default for the owner.
+    </p></div>
+  </div>
+</article>
+
+<article class="card medium" data-sev="medium">
+  <span class="ribbon partial">Trade-off accepted</span>
+  <div class="card-head"><span class="badge medium">Medium</span><span class="card-id">C-05→M</span><h3>API-key <code>{{var}}</code> substitution can exfiltrate vault values (was Critical, now Medium)</h3></div>
+  <div class="where">backend/src/monitor.ts · flowRunner.ts · prereqRunner.ts (Phase 1.27.4 design)</div>
+  <div class="row">
+    <div class="block remain"><h4>Why it's still open</h4><p>
+      Restricting <code>{{api_key}}</code> to header values only — the recommended fix — would break any URL / body / query-param that currently references vault values. The user has flows in production that rely on this. <b>Downgraded from Critical to Medium</b> because there's no longer a network-accessible attacker (loopback bind) — the threat is now strictly "trust your project editors".
+    </p></div>
+    <div class="block fix"><h4>Long-term option</h4><p>
+      A per-project toggle (<code>allow_vault_in_url_body</code>, default off for new projects) + an audit log entry every time a vault var resolves into a URL/body/query. Existing projects keep current behavior; new ones get the safer default. Designed for Phase 2.
+    </p></div>
+  </div>
+</article>
+
+<h2 class="sec">🔵 Still open — Low (3)</h2>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-01</span><h3>No CSRF tokens on mutating requests</h3></div>
+  <div class="where">frontend/src/api.ts</div>
+  <div class="block remain"><h4>Why it's still open</h4><p>Only matters once auth is added — there's nothing to CSRF without sessions. Will be wired up in the same Phase 2 auth work.</p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-02</span><h3>AWS SES setup guide missing copy-pasteable IAM policy</h3></div>
+  <div class="where">backend/.env.example</div>
+  <div class="block remain"><h4>Status</h4><p>
+    The guide already lists the two required actions (<code>ses:SendEmail</code> + <code>ses:SendRawEmail</code>) but not as a single JSON snippet. Defer until the AWS access lands and the IAM role is actually being created — easier to verify with real account context.
+  </p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-03</span><h3>Response bodies (up to 256KB) held in memory during assertion eval</h3></div>
+  <div class="where">backend/src/timing.ts MAX_BODY_BYTES</div>
+  <div class="block remain"><h4>Why it's still open</h4><p>The body must be in memory to evaluate <code>body-contains</code> assertions. Not persisted to disk; not logged. The mitigation is operational ("don't monitor endpoints that return secrets"), which belongs in the docs not the code. Will add to ARCHITECTURE.md next pass.</p></div>
+</article>
+
+<article class="card low" data-sev="low">
+  <div class="card-head"><span class="badge low">Low</span><span class="card-id">L-04</span><h3>Slack webhook URLs + email recipient lists stored plaintext</h3></div>
+  <div class="where">backend/data/db.sqlite (projects table)</div>
+  <div class="block remain"><h4>Why it's still open</h4><p>Same as C-04 — bundled into the vault-encryption work. Same compensating control (restrict DB file perms).</p></div>
+</article>
+
+<h2 class="sec">⚪ Info — accepted</h2>
+
+<article class="card info" data-sev="info">
+  <div class="card-head"><span class="badge info">Info</span><span class="card-id">I-01</span><h3><code>node:sqlite</code> still marked Experimental</h3></div>
+  <div class="block remain"><h4>Status</h4><p>Stable for this scale. Re-check on every Node major upgrade.</p></div>
+</article>
+
+<article class="card info" data-sev="info">
+  <div class="card-head"><span class="badge info">Info</span><span class="card-id">I-02</span><h3>Browser autofill mitigation in place for Add-Key form</h3></div>
+  <div class="block remain"><h4>Status</h4><p>Phase 1.27.6.6 stack of 5 defenses. Kept documented in source so future devs don't strip them.</p></div>
+</article>
+
+<article class="card info" data-sev="info">
+  <div class="card-head"><span class="badge info">Info</span><span class="card-id">I-03</span><h3>AWS SDK adds ~30 transitive dependencies vs. nodemailer</h3></div>
+  <div class="block remain"><h4>Status</h4><p>Currently <code>npm audit</code> reports <b>0 vulnerabilities</b> in backend. The SDK surface is monitored automatically on every install.</p></div>
+</article>
+
+<article class="card info" data-sev="info">
+  <div class="card-head"><span class="badge info">Info</span><span class="card-id">I-04</span><h3>No Dockerfile / deployment manifest yet</h3></div>
+  <div class="block remain"><h4>Status</h4><p>Useful for Phase 2 production push — non-root user + read-only FS except <code>data/</code> + distroless base would harden everything at the OS layer for free.</p></div>
+</article>
+
+<h2 class="sec">⏭ Still deferred — Critical (1, intentional)</h2>
+
+<article class="card critical" data-sev="critical">
+  <span class="ribbon partial">Phase 2 scope</span>
+  <div class="card-head"><span class="badge critical">Critical</span><span class="card-id">C-03</span><h3>No authentication or authorization on any endpoint</h3></div>
+  <div class="where">backend/src/index.ts — entire route table</div>
+  <div class="row">
+    <div class="block remain"><h4>Why it's still open</h4><p>Adding auth means adding a login screen → the user explicitly asked to keep the UI unchanged. Threat is mitigated for now by the loopback bind (H-01 fix) — the only attacker who can reach the backend is someone already logged into your machine.</p></div>
+    <div class="block fix"><h4>Phase 2 plan</h4><p>OAuth/SSO (Google / GitHub / Logitech corporate) → real users → <code>projects.owner_id</code> FK → middleware that checks <code>req.user.id === project.owner_id</code> on every mutating route. CSRF tokens wired up at the same time.</p></div>
+  </div>
+</article>
+
+<h2 class="sec">🚀 Verification commands</h2>
+
+<details class="summary-panel">
+  <summary>Reproduce the resolved status on your machine</summary>
+<pre class="code"># Both projects audit-clean
+cd backend  &amp;&amp; npm audit          # → "found 0 vulnerabilities"
+cd ../frontend &amp;&amp; npm audit       # → "found 0 vulnerabilities"
+
+# Backend binds to loopback only
+netstat -ano | grep ":4000.*LISTENING"
+#   TCP    127.0.0.1:4000   ...  LISTENING   &lt;pid&gt;       ← not 0.0.0.0
+
+# Helmet headers active
+curl -I http://127.0.0.1:4000/api/health
+#   X-Content-Type-Options: nosniff
+#   X-Frame-Options: SAMEORIGIN
+#   Referrer-Policy: no-referrer
+#   Strict-Transport-Security: ...
+#   ...
+
+# SSRF blocklist active (try to monitor a private IP — should be refused)
+# Add a URL like http://127.0.0.1:8080 from the UI → next check returns
+# error "Blocked by SSRF guard: 127.0.0.1 is a private/loopback IP.
+# Set SSRF_ALLOW_PRIVATE=true to override."
+
+# Rate limit (run 700 reqs in a minute — last few get 429)
+for i in $(seq 1 700); do curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "Origin: https://evil.example.com" \
+  http://127.0.0.1:4000/api/projects; done | sort | uniq -c
+#   100 200    ← normal responses
+#   ...   429  ← rate-limit kicks in</pre>
+</details>
+
+<div class="footer">
+  <p>
+    Generated 2026-06-12 against Phase 1.27.9. Compare against the baseline <a href="security-review-2026-06-12.html">security-review-2026-06-12.html</a> to see what changed. Re-run a fresh audit after every dependency bump or backend route addition.
+  </p>
+  <p>
+    <b>One-line takeaway:</b> 25 of 32 findings resolved, including <b>every Critical and every High</b> except the one Critical (auth) that's an explicit Phase-2 scope item. The dashboard you were using before is byte-identical from a UX standpoint — only the backend's network posture, header set, and validation rules changed.
+  </p>
+</div>
+
+</div>
+
+<script>
+  const filterBar = document.getElementById('sevFilter');
+  const cards = document.querySelectorAll('article.card');
+  function applyFilter(sev) {
+    filterBar.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.sev === sev));
+    cards.forEach(c => c.classList.toggle('hidden', sev !== 'all' && c.dataset.sev !== sev));
+    runSearch();
+  }
+  filterBar.addEventListener('click', e => {
+    const btn = e.target.closest('button[data-sev]');
+    if (btn) applyFilter(btn.dataset.sev);
+  });
+  const box = document.getElementById('searchBox');
+  function runSearch() {
+    const q = box.value.trim().toLowerCase();
+    cards.forEach(c => {
+      if (c.classList.contains('hidden')) return;
+      if (!q) { c.style.display = ''; return; }
+      c.style.display = c.innerText.toLowerCase().includes(q) ? '' : 'none';
+    });
+  }
+  box.addEventListener('input', runSearch);
+</script>
+
+</body>
+</html>

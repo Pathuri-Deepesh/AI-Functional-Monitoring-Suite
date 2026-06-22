@@ -11,6 +11,7 @@ import {
   cacheProjectVariable,
   finishPrereqRun,
   getProject,
+  getProjectApiKeysScope,
   getProjectVariables,
   getPrereqRun,
   listPrereqSteps,
@@ -230,8 +231,13 @@ async function executeRun(
 ): Promise<PrereqRun | undefined> {
   const steps = listPrereqSteps(projectId);
 
-  // Seed from already-cached project vars (so a partial chain can reuse a fresh token)
-  const variables: Record<string, string> = { ...getProjectVariables(projectId) };
+  // Seed from vault API keys (Postman-style {{var}}) and already-cached project vars
+  // (so a partial chain can reuse a fresh token). API keys are at the bottom of the
+  // merge so a captured token of the same name will override the static vault entry.
+  const variables: Record<string, string> = {
+    ...getProjectApiKeysScope(projectId),
+    ...getProjectVariables(projectId),
+  };
 
   let allOk = true;
   let failedAtStepId: string | null = null;

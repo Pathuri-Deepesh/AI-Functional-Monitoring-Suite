@@ -33,8 +33,8 @@ AI-Functional-Monitoring-Suite/
 │   ├── ARCHITECTURE.md     # this file (committed)
 │   ├── STATUS.md           # 1-pager snapshot of current state (committed)
 │   ├── PROGRESS.md         # phase-by-phase log (gitignored)
-│   ├── project-tracker.csv # row-per-task spreadsheet (gitignored)
-│   └── project-tracker.xlsx# date-grouped pretty version (gitignored)
+│   └── project-tracker.csv # row-per-task spreadsheet (gitignored)
+├── project-tracker.xlsx    # date-grouped pretty version at repo root (gitignored)
 └── README.md               # public-facing run guide at the root for GitHub/GitLab
 ```
 
@@ -52,10 +52,10 @@ Two `npm install` commands — one inside `backend/`, one inside `frontend/`. Ea
 | HTTP framework | Express 4.19 | Boring, well-known, fast enough |
 | TypeScript | 5.4 via `tsx watch` | No build step in dev; `tsc` only for `npm run build` typecheck |
 | DB | SQLite (`node:sqlite`), WAL mode, FKs on | Single-file, zero ops, fits intern scope |
-| SMTP | nodemailer 6 | Standard pick; works with Gmail App Password and corporate SMTP |
+| Email | `@aws-sdk/client-sesv2` | AWS SES v2 API. Credentials via the standard SDK chain (env vars / `~/.aws/credentials` / IAM role) |
 | OpenAPI | `@apidevtools/swagger-parser` + `js-yaml` | Robust spec validation + clean YAML round-trip |
 
-### Entry point — `backend/src/index.ts`
+### Entry point — `backend/src/app.ts`
 
 Boots Express, mounts ~60 REST routes grouped by resource (projects, urls, api-keys, flows, flow-steps, prereqs, runs, audit, uploads, openapi), kicks off the monitor loop, serves `data/reports/*.html` statically under `/reports/`. Listens on `PORT` (default 4000). Body limits: 1 MB JSON, 10 MB raw binary for uploads.
 
@@ -63,7 +63,7 @@ Boots Express, mounts ~60 REST routes grouped by resource (projects, urls, api-k
 
 | Module | Role |
 |---|---|
-| `index.ts` | Express bootstrap + every route handler |
+| `app.ts` | Express bootstrap + every route handler (renamed from `index.ts` in Phase 1.27.10) |
 | `store.ts` | SQLite CRUD for every entity — the only file that touches SQL |
 | `db.ts` | Schema init, `ensureColumn` additive migrations, retention pruning |
 | `monitor.ts` | 30-second tick loop. Drives `checkOne(url)` + due flows + due prereq chains |
@@ -215,7 +215,7 @@ Three trigger sites in the backend, all using the **same** "failure → Slack + 
 
 Each channel has its own configuration gate:
 - **Slack**: per-project `slackWebhookUrl` column. Empty → channel skipped silently.
-- **Email**: requires both `SMTP_HOST/PORT/USER/PASS` env vars (set in `backend/.env`) **and** per-project `notificationEmails` recipients. Either empty → returns `{ sent: false, reason: "..." }` without throwing.
+- **Email**: requires `AWS_REGION` + `SES_FROM_EMAIL` env vars (set in `backend/.env`), valid AWS credentials resolvable through the standard SDK chain, AND per-project `notificationEmails` / `latencyFailureEmails` recipients. Missing any → returns `{ sent: false, reason: "..." }` without throwing.
 
 The Snapshot & Report path is **read-only** by design — it summarises the *current* state of URLs and flows without re-running any checks. (Original `?refresh=true` query opts back into the legacy "re-check everything" behaviour.)
 
@@ -245,7 +245,7 @@ The Snapshot & Report path is **read-only** by design — it summarises the *cur
 - `node_modules/`, `dist/`, `.vite/`
 - `**/.env` (every env file with real secrets)
 - `data/` (SQLite DB, WAL files, audit HTML, uploads)
-- `documentation/PROGRESS.md`, `documentation/project-tracker.csv`, `documentation/project-tracker.xlsx`
+- `documentation/PROGRESS.md`, `documentation/project-tracker.csv`, `project-tracker.xlsx` (at repo root)
 - `.claude_internal/` (seeds + migrations + the Python script that generates the pretty XLSX)
 - `.postman/`, `postman/` (local Postman scaffolding for manual smoke tests)
 - OS junk (`.DS_Store`, `Thumbs.db`)

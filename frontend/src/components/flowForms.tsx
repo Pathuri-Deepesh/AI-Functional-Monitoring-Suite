@@ -11,6 +11,12 @@ import {
   updatePrereqStep,
 } from "../api";
 import { BinaryBodyEditor } from "./BinaryBodyEditor";
+import {
+  apiKeyVarsGroup,
+  AvailableVarsPanel,
+  prereqVarsGroup,
+  type VarGroup,
+} from "./forms";
 import type {
   Assertion,
   AssertionType,
@@ -228,6 +234,29 @@ export function StepEditorForm(
       }
     }
     return list;
+  })();
+
+  // Same data as availableVars but GROUPED by source for AvailableVarsPanel.
+  // Adds the API Key Vault group (Phase 1.27.4 {{slug}} substitution) which
+  // the old flat list didn't surface.
+  const availableVarGroups: VarGroup[] = (() => {
+    const groups: VarGroup[] = [
+      apiKeyVarsGroup(project.apiKeys),
+      prereqVarsGroup(projectVars ?? []),
+    ];
+    for (const s of flow.steps) {
+      if (step && s.id === step.id) break;
+      const stepVars = s.extractions
+        .filter((ex) => ex.saveAs.trim())
+        .map((ex) => ({
+          name: ex.saveAs,
+          tooltip: `extracted by step ${s.position}${s.description ? ` (${s.description})` : ""}`,
+        }));
+      if (stepVars.length > 0) {
+        groups.push({ label: `Step ${s.position}`, icon: "📋", vars: stepVars });
+      }
+    }
+    return groups;
   })();
 
   // Phase 1.19 — for-each candidate sources for THIS step. Two flavors:
@@ -469,6 +498,7 @@ export function StepEditorForm(
           rows={computeRows}
           setRows={setComputeRows}
           availableVars={availableVars}
+          availableVarGroups={availableVarGroups}
         />
       ) : stepType === "loop" ? (
         <LoopStepBody
@@ -503,16 +533,7 @@ export function StepEditorForm(
         </Tab>
       </div>
 
-      {availableVars.length > 0 && (
-        <div className="vars-hint">
-          <strong>Available variables</strong> (from earlier steps): {" "}
-          {availableVars.map((v, i) => (
-            <span key={i} className="var-chip">
-              <code>{`{{${v.name}}}`}</code> <span className="muted small">· {v.from}</span>
-            </span>
-          ))}
-        </div>
-      )}
+      <AvailableVarsPanel groups={availableVarGroups} />
 
       {tab === "basics" && (
         <>
@@ -794,8 +815,9 @@ function ComputeStepBody(props: {
   rows: ComputeRow[];
   setRows: (rows: ComputeRow[]) => void;
   availableVars: { name: string; from: string }[];
+  availableVarGroups: VarGroup[];
 }) {
-  const { description, setDescription, rows, setRows, availableVars } = props;
+  const { description, setDescription, rows, setRows, availableVars, availableVarGroups } = props;
 
   function addRow() {
     const newRow: ComputeRow = {
@@ -814,16 +836,7 @@ function ComputeStepBody(props: {
 
   return (
     <>
-      {availableVars.length > 0 && (
-        <div className="vars-hint">
-          <strong>Available variables</strong> (from earlier steps): {" "}
-          {availableVars.map((v, i) => (
-            <span key={i} className="var-chip">
-              <code>{`{{${v.name}}}`}</code> <span className="muted small">· {v.from}</span>
-            </span>
-          ))}
-        </div>
-      )}
+      <AvailableVarsPanel groups={availableVarGroups} />
 
       <Field label="Description" hint="What does this compute step derive?">
         <input
@@ -1964,6 +1977,26 @@ export function PrereqStepEditorForm(
     return list;
   })();
 
+  // Grouped form for the AvailableVarsPanel. Prereqs are circular against
+  // themselves so the project-pool vars don't apply here (those ARE the prereq
+  // outputs); but the API Key Vault does — a prereq can login using {{api_key}}.
+  const availableVarGroups: VarGroup[] = (() => {
+    const groups: VarGroup[] = [apiKeyVarsGroup(project.apiKeys)];
+    for (const s of siblingSteps) {
+      if (step && s.id === step.id) break;
+      const stepVars = s.extractions
+        .filter((ex) => ex.saveAs.trim())
+        .map((ex) => ({
+          name: ex.saveAs,
+          tooltip: `extracted by prereq step ${s.position}${s.description ? ` (${s.description})` : ""}`,
+        }));
+      if (stepVars.length > 0) {
+        groups.push({ label: `Prereq step ${s.position}`, icon: "📋", vars: stepVars });
+      }
+    }
+    return groups;
+  })();
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (stepType === "compute") {
@@ -2068,6 +2101,7 @@ export function PrereqStepEditorForm(
           rows={computeRows}
           setRows={setComputeRows}
           availableVars={availableVars}
+          availableVarGroups={availableVarGroups}
         />
       ) : (
         <>
@@ -2090,16 +2124,7 @@ export function PrereqStepEditorForm(
         </Tab>
       </div>
 
-      {availableVars.length > 0 && (
-        <div className="vars-hint">
-          <strong>Available variables</strong> (from earlier prereq steps): {" "}
-          {availableVars.map((v, i) => (
-            <span key={i} className="var-chip">
-              <code>{`{{${v.name}}}`}</code> <span className="muted small">· {v.from}</span>
-            </span>
-          ))}
-        </div>
-      )}
+      <AvailableVarsPanel groups={availableVarGroups} />
 
       {tab === "basics" && (
         <>

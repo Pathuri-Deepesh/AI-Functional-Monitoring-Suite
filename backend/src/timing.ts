@@ -1,5 +1,6 @@
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { getUpload } from "./store.js";
@@ -8,6 +9,94 @@ import type { BinaryBodyConfig, BodyType, HttpMethod, KeyValue, Timings } from "
 
 const REQUEST_TIMEOUT_MS = 8_000;
 const MAX_BODY_BYTES = 256 * 1024; // capture up to 256KB of response body for assertions
+
+// Phase 1.27.9 — SSRF blocklist. The app's job is to fetch user-supplied URLs,
+// so an unconstrained client would happily hit cloud metadata
+// (169.254.169.254), internal admin panels, and localhost services. Default:
+// block every private / loopback / link-local / metadata / CGN / multicast
+// range. Opt back in for testing internal endpoints via env:
+//
+//     SSRF_ALLOW_PRIVATE=true
+//
+// The resolved IP is also PINNED through the http.request `lookup` option so
+// that DNS rebinding (resolve to public IP for the check, then flip to
+// internal IP for the connect) is structurally impossible.
+const ALLOW_PRIVATE_TARGETS =
+  (process.env.SSRF_ALLOW_PRIVATE ?? "").toLowerCase() === "true";
+
+function isPrivateOrLoopback(ip: string): boolean {
+  // IPv6
+  if (ip.includes(":")) {
+    if (ip === "::1" || ip === "::") return true;
+    const lower = ip.toLowerCase();
+    if (lower.startsWith("fc") || lower.startsWith("fd")) return true; // unique-local (ULA)
+    if (lower.startsWith("fe80")) return true; // link-local
+    if (lower.startsWith("ff")) return true;   // multicast
+    // IPv4-mapped: ::ffff:a.b.c.d
+    const m = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (m) return isPrivateV4(m[1]);
+    return false;
+  }
+  return isPrivateV4(ip);
+}
+
+function isPrivateV4(ip: string): boolean {
+  const parts = ip.split(".").map((s) => Number(s));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const [a, b] = parts;
+  if (a === 0) return true;                             // 0.0.0.0/8 — "this network"
+  if (a === 10) return true;                            // 10.0.0.0/8
+  if (a === 127) return true;                           // 127.0.0.0/8 — loopback
+  if (a === 169 && b === 254) return true;              // 169.254.0.0/16 — link-local incl. AWS/GCP/Azure metadata
+  if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16.0.0/12
+  if (a === 192 && b === 168) return true;              // 192.168.0.0/16
+  if (a === 192 && b === 0 && parts[2] === 0) return true; // 192.0.0.0/24 — IETF Protocol Assignments
+  if (a === 198 && (b === 18 || b === 19)) return true; // 198.18.0.0/15 — benchmarking
+  if (a === 100 && b >= 64 && b <= 127) return true;    // 100.64.0.0/10 — CGN
+  if (a >= 224) return true;                            // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved
+  return false;
+}
+
+interface ResolveOk {
+  ok: true;
+  address: string;
+  family: 4 | 6;
+}
+interface ResolveErr {
+  ok: false;
+  reason: string;
+}
+
+async function resolveSafely(hostname: string): Promise<ResolveOk | ResolveErr> {
+  // Numeric literal? Skip DNS entirely.
+  const isLiteralV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname);
+  const isLiteralV6 = hostname.includes(":") && /^[0-9a-fA-F:.]+$/.test(hostname);
+  if (isLiteralV4 || isLiteralV6) {
+    const family: 4 | 6 = isLiteralV6 ? 6 : 4;
+    if (!ALLOW_PRIVATE_TARGETS && isPrivateOrLoopback(hostname)) {
+      return {
+        ok: false,
+        reason: `Blocked by SSRF guard: ${hostname} is a private/loopback IP. Set SSRF_ALLOW_PRIVATE=true to override.`,
+      };
+    }
+    return { ok: true, address: hostname, family };
+  }
+  try {
+    const r = await dnsLookup(hostname, { family: 0, verbatim: true });
+    if (!ALLOW_PRIVATE_TARGETS && isPrivateOrLoopback(r.address)) {
+      return {
+        ok: false,
+        reason: `Blocked by SSRF guard: ${hostname} resolves to private/loopback IP ${r.address}. Set SSRF_ALLOW_PRIVATE=true to override.`,
+      };
+    }
+    return { ok: true, address: r.address, family: (r.family === 6 ? 6 : 4) as 4 | 6 };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `DNS lookup failed for ${hostname}: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
 
 export interface TimedResult {
   statusCode: number | null;
@@ -40,6 +129,21 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
         responseBody: "",
         responseHeaders: {},
         error: new Error("Invalid URL"),
+      });
+      return;
+    }
+
+    // Defense in depth: reject any non-http(s) scheme. URL validators at
+    // creation already do this for standalone URLs, but flow + prereq steps
+    // path here too and a malicious `{{var}}` substitution could craft a
+    // file:// or gopher:// here at runtime.
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      resolve({
+        statusCode: null,
+        timings: emptyTimings(),
+        responseBody: "",
+        responseHeaders: {},
+        error: new Error(`Blocked by SSRF guard: scheme "${parsed.protocol}" is not http(s)`),
       });
       return;
     }
@@ -80,6 +184,23 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
       end: null,
     };
 
+    // SSRF pre-flight: resolve hostname, reject private/loopback/metadata IPs,
+    // then PIN that exact IP via the `lookup` override so DNS rebinding (flip
+    // public→internal between resolve and connect) cannot bypass the check.
+    resolveSafely(parsed.hostname).then((check) => {
+      if (!check.ok) {
+        resolve({
+          statusCode: null,
+          timings: buildTimings(start, marks),
+          responseBody: "",
+          responseHeaders: {},
+          error: new Error(check.reason),
+        });
+        return;
+      }
+      const pinnedIp = check.address;
+      const pinnedFamily = check.family;
+
     const req = transport(
       {
         protocol: parsed.protocol,
@@ -89,6 +210,29 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
         method: spec.method,
         agent: false,
         headers,
+        // Pin resolved IP — prevents DNS rebinding mid-connection.
+        // Node 18+ HTTP internally calls lookup with `all: true` and expects
+        // the callback signature `(err, [{address, family}, ...])`. Older
+        // callers (and dns.lookup default) use `(err, address, family)`. We
+        // branch on `opts.all` to support both — passing only the single-IP
+        // form caused "Invalid IP address: undefined" on every request.
+        lookup: (_host, opts, cb) => {
+          if (opts && (opts as { all?: boolean }).all) {
+            (cb as unknown as (
+              e: NodeJS.ErrnoException | null,
+              addrs: Array<{ address: string; family: number }>
+            ) => void)(null, [{ address: pinnedIp, family: pinnedFamily }]);
+          } else {
+            (cb as (e: NodeJS.ErrnoException | null, addr: string, family: number) => void)(
+              null,
+              pinnedIp,
+              pinnedFamily
+            );
+          }
+        },
+        // Preserve Host header so TLS/SNI + virtual-host routing still work
+        // even though we're connecting by IP.
+        servername: parsed.hostname,
       },
       (res) => {
         marks.response = Date.now();
@@ -159,6 +303,7 @@ export function timedFetch(spec: RequestSpec): Promise<TimedResult> {
 
     if (bodyBuffer) req.write(bodyBuffer);
     req.end();
+    }); // end of resolveSafely().then(...)
   });
 }
 

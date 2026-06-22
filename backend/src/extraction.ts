@@ -162,6 +162,28 @@ function walk(
 export type Scope = Record<string, unknown>;
 export type ScopeStack = Scope[];
 
+/**
+ * Phase 1.27.4 — slugify an API-key user-entered name into a valid `{{var}}`
+ * identifier. Must conform to the regex `[a-zA-Z_][\w.-]*` enforced by
+ * `substitute()` below.
+ *
+ * Examples:
+ *   "Stripe Test"        → "stripe_test"
+ *   "Stripe Test (live)" → "stripe_test_live"
+ *   "GitHub PAT"         → "github_pat"
+ *   "2024_key"           → "_2024_key" (leading digit → prefixed `_`)
+ *   "  -- "              → "key"        (degenerate → fallback)
+ */
+export function slugifyKeyName(name: string): string {
+  let s = (name ?? "").toLowerCase();
+  s = s.replace(/[^a-z0-9_]+/g, "_");
+  s = s.replace(/_+/g, "_");
+  s = s.replace(/^_+|_+$/g, "");
+  if (!s) return "key";
+  if (/^[0-9]/.test(s)) s = "_" + s;
+  return s;
+}
+
 export function substitute(
   template: string,
   vars: Scope | ScopeStack

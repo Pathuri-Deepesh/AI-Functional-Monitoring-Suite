@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { db, tx } from "./db.js";
+import { slugifyKeyName } from "./extraction.js";
 import type {
   ApiKey,
   Assertion,
@@ -38,6 +39,7 @@ interface ProjectRow {
   description: string;
   slack_webhook_url: string;
   notification_emails: string;
+  latency_failure_emails: string;
   prereq_interval_minutes: number;
   prereq_enabled: number;
   prereq_last_run_at: number | null;
@@ -67,6 +69,9 @@ interface UrlRow {
   assertions_json: string;
   custom_headers_json: string | null;
   query_params_json: string | null;
+  wait_before_ms: number | null;
+  max_retries: number | null;
+  retry_backoff_ms: number | null;
   status_code: number | null;
   status_group: string | null;
   error_reason: string | null;
@@ -119,6 +124,7 @@ function rowToProject(r: ProjectRow): Project {
     description: r.description,
     slackWebhookUrl: r.slack_webhook_url,
     notificationEmails: r.notification_emails ?? "",
+    latencyFailureEmails: r.latency_failure_emails ?? "",
     apiKeys: keys.map(rowToApiKey),
     prereqIntervalMinutes: r.prereq_interval_minutes ?? 30,
     prereqEnabled: (r.prereq_enabled ?? 1) === 1,
@@ -144,6 +150,9 @@ function rowToUrl(r: UrlRow): MonitoredUrl {
     assertions: safeParse<Assertion[]>(r.assertions_json, []),
     customHeaders: safeParse<KeyValue[]>(r.custom_headers_json, []),
     queryParams: safeParse<KeyValue[]>(r.query_params_json, []),
+    waitBeforeMs: r.wait_before_ms ?? 0,
+    maxRetries: r.max_retries ?? 0,
+    retryBackoffMs: r.retry_backoff_ms ?? 0,
     statusCode: r.status_code,
     statusGroup: (r.status_group as StatusGroup | null) ?? null,
     errorReason: r.error_reason,
@@ -235,6 +244,7 @@ export function updateProject(
       | "description"
       | "slackWebhookUrl"
       | "notificationEmails"
+      | "latencyFailureEmails"
       | "prereqIntervalMinutes"
       | "prereqEnabled"
     >
@@ -246,6 +256,7 @@ export function updateProject(
     .prepare(
       `UPDATE projects
        SET name = ?, description = ?, slack_webhook_url = ?, notification_emails = ?,
+           latency_failure_emails = ?,
            prereq_interval_minutes = ?, prereq_enabled = ?
        WHERE id = ?`
     )
@@ -254,6 +265,7 @@ export function updateProject(
       patch.description ?? existing.description,
       patch.slackWebhookUrl ?? existing.slackWebhookUrl,
       patch.notificationEmails ?? existing.notificationEmails,
+      patch.latencyFailureEmails ?? existing.latencyFailureEmails,
       Math.max(1, Math.min(60 * 24, Number(patch.prereqIntervalMinutes ?? existing.prereqIntervalMinutes))),
       (patch.prereqEnabled ?? existing.prereqEnabled) ? 1 : 0,
       id
@@ -343,6 +355,9 @@ export function addUrl(input: {
   assertions?: Assertion[];
   customHeaders?: KeyValue[];
   queryParams?: KeyValue[];
+  waitBeforeMs?: number;
+  maxRetries?: number;
+  retryBackoffMs?: number;
   importSource?: string | null;
   importSpecId?: string | null;
 }): MonitoredUrl {
@@ -376,8 +391,9 @@ export function addUrl(input: {
       `INSERT INTO urls (id, project_id, url, description, api_key_id, interval_minutes,
                          method, body_type, body, body_content_type, assertions_json,
                          custom_headers_json, query_params_json,
+                         wait_before_ms, max_retries, retry_backoff_ms,
                          import_source, import_spec_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       id,
@@ -393,10 +409,19 @@ export function addUrl(input: {
       JSON.stringify(input.assertions ?? []),
       JSON.stringify(cleanKv(input.customHeaders ?? [])),
       JSON.stringify(cleanKv(input.queryParams ?? [])),
+      clampRetryField(input.waitBeforeMs, 0, 60_000),
+      clampRetryField(input.maxRetries, 0, 10),
+      clampRetryField(input.retryBackoffMs, 0, 60_000),
       input.importSource ?? null,
       input.importSpecId ?? null
     );
   return getUrl(id)!;
+}
+
+function clampRetryField(v: number | undefined, min: number, max: number): number {
+  const n = Number(v ?? 0);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
 export function getUrlsByImportSpec(projectId: string, specId: string): MonitoredUrl[] {
@@ -429,6 +454,9 @@ export function updateUrl(
       | "assertions"
       | "customHeaders"
       | "queryParams"
+      | "waitBeforeMs"
+      | "maxRetries"
+      | "retryBackoffMs"
     >
   >
 ): MonitoredUrl | undefined {
@@ -445,7 +473,8 @@ export function updateUrl(
       `UPDATE urls
        SET url = ?, description = ?, api_key_id = ?, interval_minutes = ?,
            method = ?, body_type = ?, body = ?, body_content_type = ?, assertions_json = ?,
-           custom_headers_json = ?, query_params_json = ?
+           custom_headers_json = ?, query_params_json = ?,
+           wait_before_ms = ?, max_retries = ?, retry_backoff_ms = ?
        WHERE id = ?`
     )
     .run(
@@ -460,6 +489,9 @@ export function updateUrl(
       JSON.stringify(patch.assertions ?? existing.assertions),
       JSON.stringify(cleanKv(patch.customHeaders ?? existing.customHeaders)),
       JSON.stringify(cleanKv(patch.queryParams ?? existing.queryParams)),
+      clampRetryField(patch.waitBeforeMs ?? existing.waitBeforeMs, 0, 60_000),
+      clampRetryField(patch.maxRetries ?? existing.maxRetries, 0, 10),
+      clampRetryField(patch.retryBackoffMs ?? existing.retryBackoffMs, 0, 60_000),
       id
     );
   return getUrl(id);
@@ -531,6 +563,23 @@ export function resolveApiKeyHeader(url: MonitoredUrl): { name: string; value: s
   const key = project.apiKeys.find((k) => k.id === url.apiKeyId);
   if (!key) return null;
   return { name: key.headerName, value: `${key.headerPrefix}${key.value}` };
+}
+
+/**
+ * Phase 1.27.4 — expose every vault key in a project as a `{{slugified_name}}`
+ * variable, Postman-style. Returns the RAW value (no prefix). Lowest precedence
+ * in the scope stack so prereq-captured / flow-captured vars can override on
+ * name collision. Last-key-wins on duplicate slugs (rare; vault names are
+ * usually unique by intent).
+ */
+export function getProjectApiKeysScope(projectId: string): Record<string, string> {
+  const project = getProject(projectId);
+  if (!project) return {};
+  const out: Record<string, string> = {};
+  for (const k of project.apiKeys) {
+    out[slugifyKeyName(k.name)] = k.value;
+  }
+  return out;
 }
 
 // ===== History queries =====

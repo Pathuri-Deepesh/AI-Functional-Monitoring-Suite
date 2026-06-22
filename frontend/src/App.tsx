@@ -17,18 +17,20 @@ import { SkeletonProject, SkeletonSidebar } from "./components/Skeleton";
 import { Spinner } from "./components/Spinner";
 import {
   AddUrlForm,
-  ApiKeyManagerForm,
   CreateProjectForm,
-  SettingsForm,
+  SettingsPage,
+  type SettingsPanel,
 } from "./components/forms";
 import { FlowEditorForm, PrereqStepEditorForm, StepEditorForm } from "./components/flowForms";
 import { ImportSwaggerModal } from "./components/ImportSwaggerModal";
+import { applyTheme, getThemePref } from "./theme";
 import type {
   AuditResult,
   Flow,
   FlowStep,
   FlowWithSteps,
   FullSnapshot,
+  MonitoredUrl,
   PrereqStep,
   Project,
   ProjectVariable,
@@ -100,12 +102,39 @@ function saveSection(projectId: string, hash: string): void {
   }
 }
 
+/**
+ * Phase 1.27.9 — prune stale localStorage keys.
+ * Every project visit writes `fm:scroll:<projectId>` and `fm:section:<projectId>`
+ * entries. When a project is deleted they leak forever, eventually hitting
+ * the ~5MB quota OR leaking the list of project IDs the user ever touched
+ * to any future script with DOM access. This sweeps any key whose
+ * projectId doesn't appear in the current snapshot.
+ */
+function pruneStaleLocalStorage(currentProjectIds: Set<string>): void {
+  try {
+    const toDelete: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (!key) continue;
+      if (key.startsWith(SCROLL_KEY_PREFIX)) {
+        const pid = key.slice(SCROLL_KEY_PREFIX.length);
+        if (!currentProjectIds.has(pid)) toDelete.push(key);
+      } else if (key.startsWith(SECTION_KEY_PREFIX)) {
+        const pid = key.slice(SECTION_KEY_PREFIX.length);
+        if (!currentProjectIds.has(pid)) toDelete.push(key);
+      }
+    }
+    for (const k of toDelete) window.localStorage.removeItem(k);
+  } catch {
+    /* ignore (private mode, full quota, etc.) */
+  }
+}
+
 type ModalState =
   | { kind: "none" }
   | { kind: "create-project" }
   | { kind: "add-url"; project: Project }
-  | { kind: "manage-keys"; project: Project }
-  | { kind: "settings"; project: Project }
+  | { kind: "edit-url"; project: Project; url: MonitoredUrl }
   | { kind: "confirm-delete-project"; project: Project }
   | { kind: "confirm-delete-url"; urlId: string; urlText: string }
   | { kind: "audit-running"; projectName: string }
@@ -241,6 +270,9 @@ export default function App() {
     try {
       const data = await fetchStatus();
       setSnapshot(data);
+      // Phase 1.27.9 — sweep stale localStorage keys (scroll / section state
+      // for projects that no longer exist).
+      pruneStaleLocalStorage(new Set(data.projects.map((p) => p.id)));
       setActiveProjectId((current) => {
         // Prefer current state, then the saved id (in case state hasn't hydrated yet),
         // then fall back to the first available project.
@@ -293,6 +325,86 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Apply persisted theme on mount (before first significant paint).
+  // Subscribe to system-theme flips so "system" preference flips live.
+  useEffect(() => {
+    const pref = getThemePref();
+    applyTheme(pref);
+    if (pref !== "system") return;
+    const mq = window.matchMedia("(prefers-color-scheme: light)");
+    const onChange = () => applyTheme("system");
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+
+  // ----- Settings page routing (hash-based: #settings or #settings/<panel>) ---
+  // Driven entirely by the URL so the browser Back button just works: pushState
+  // when opening, the user's Back pop fires hashchange → settingsView clears.
+  const [settingsView, setSettingsView] = useState<{
+    active: boolean;
+    panel: SettingsPanel;
+  }>(() => {
+    const m = window.location.hash.match(/^#settings(?:\/(.+))?$/);
+    return m
+      ? { active: true, panel: (m[1] as SettingsPanel) || "general" }
+      : { active: false, panel: "general" };
+  });
+
+  useEffect(() => {
+    function onHash() {
+      const m = window.location.hash.match(/^#settings(?:\/(.+))?$/);
+      if (m) {
+        setSettingsView({
+          active: true,
+          panel: (m[1] as SettingsPanel) || "general",
+        });
+      } else {
+        setSettingsView((prev) => (prev.active ? { ...prev, active: false } : prev));
+      }
+    }
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  function openSettings(panel: SettingsPanel = "general") {
+    const target = `#settings/${panel}`;
+    if (window.location.hash !== target) {
+      window.history.pushState(null, "", target);
+    }
+    setSettingsView({ active: true, panel });
+  }
+
+  function closeSettings() {
+    // Browser back pops the #settings entry pushed by openSettings, which
+    // fires hashchange and clears settingsView. If there's no history entry
+    // (e.g. user deep-linked here directly), fall back to an explicit nav.
+    if (window.history.length > 1) {
+      window.history.back();
+    } else {
+      window.history.replaceState(null, "", "#urls");
+      setSettingsView((prev) => ({ ...prev, active: false }));
+    }
+  }
+
+  function changeSettingsPanel(panel: SettingsPanel) {
+    const target = `#settings/${panel}`;
+    if (window.location.hash !== target) {
+      // replaceState (not push) so Back still returns to the project view
+      // instead of bouncing between settings panels.
+      window.history.replaceState(null, "", target);
+    }
+    setSettingsView({ active: true, panel });
+  }
+
+  // Settings-page action callback: refresh + toast, DON'T navigate. Distinct
+  // from handleFormDone (below) which is used by add-url / edit-url / etc.
+  // modals that should close after a successful save.
+  async function handleSettingsAction(message?: string) {
+    if (message) pushToast(message);
+    await refresh();
+    setRefreshTick((t) => t + 1);
+  }
 
   const activeProject = useMemo(
     () => snapshot?.projects.find((p) => p.id === activeProjectId) ?? null,
@@ -433,24 +545,35 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <Sidebar
-        projects={snapshot?.projects ?? []}
-        urls={snapshot?.urls ?? []}
-        activeProjectId={activeProjectId}
-        onSelect={selectProject}
-        onCreate={() => setModal({ kind: "create-project" })}
-      />
+    <div className={`app ${settingsView.active ? "app-settings" : ""}`}>
+      {!settingsView.active && (
+        <Sidebar
+          projects={snapshot?.projects ?? []}
+          urls={snapshot?.urls ?? []}
+          activeProjectId={activeProjectId}
+          onSelect={selectProject}
+          onCreate={() => setModal({ kind: "create-project" })}
+        />
+      )}
 
-      {activeProject ? (
+      {activeProject && settingsView.active ? (
+        <SettingsPage
+          key={`settings-${activeProject.id}`}
+          project={activeProject}
+          initialPanel={settingsView.panel}
+          onBack={closeSettings}
+          onPanelChange={changeSettingsPanel}
+          onDone={handleSettingsAction}
+          onError={(m) => pushToast(m, "error")}
+        />
+      ) : activeProject ? (
         <ProjectView
           key={activeProject.id}
           project={activeProject}
           urls={projectUrls}
           refreshTick={refreshTick}
           onAddUrl={() => setModal({ kind: "add-url", project: activeProject })}
-          onManageKeys={() => setModal({ kind: "manage-keys", project: activeProject })}
-          onSettings={() => setModal({ kind: "settings", project: activeProject })}
+          onSettings={() => openSettings("general")}
           onDeleteProject={() =>
             setModal({ kind: "confirm-delete-project", project: activeProject })
           }
@@ -461,6 +584,7 @@ export default function App() {
           onAfterFullCheck={handleAfterFullCheck}
           onToast={pushToast}
           onCheckUrl={handleCheckUrl}
+          onEditUrl={(url) => setModal({ kind: "edit-url", project: activeProject, url })}
           onRemoveUrl={handleDeleteUrl}
           onCreateFlow={() => setModal({ kind: "create-flow", project: activeProject })}
           onEditFlow={(flow) => setModal({ kind: "edit-flow", project: activeProject, flow })}
@@ -517,39 +641,22 @@ export default function App() {
       </Modal>
 
       <Modal
-        open={modal.kind === "manage-keys"}
-        title="API keys"
-        subtitle={
-          modal.kind === "manage-keys"
-            ? `Keys for: ${modal.project.name} — only URLs in this project can use them.`
-            : undefined
-        }
+        open={modal.kind === "edit-url"}
+        title="Edit URL"
+        subtitle={modal.kind === "edit-url" ? modal.url.url : undefined}
         onClose={() => setModal({ kind: "none" })}
         size="lg"
       >
-        {modal.kind === "manage-keys" && (
-          <ApiKeyManagerForm
+        {modal.kind === "edit-url" && (
+          <AddUrlForm
             project={modal.project}
+            url={modal.url}
             onDone={handleFormDone}
             onError={(m) => pushToast(m, "error")}
           />
         )}
       </Modal>
 
-      <Modal
-        open={modal.kind === "settings"}
-        title="Project settings"
-        onClose={() => setModal({ kind: "none" })}
-        size="lg"
-      >
-        {modal.kind === "settings" && (
-          <SettingsForm
-            project={modal.project}
-            onDone={handleFormDone}
-            onError={(m) => pushToast(m, "error")}
-          />
-        )}
-      </Modal>
 
       <Modal
         open={modal.kind === "import-swagger"}

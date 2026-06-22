@@ -41,7 +41,6 @@ interface Props {
   project: Project;
   urls: MonitoredUrl[];
   onAddUrl: () => void;
-  onManageKeys: () => void;
   onSettings: () => void;
   onDeleteProject: () => void;
   onRunAudit: () => void;
@@ -53,6 +52,7 @@ interface Props {
   /** Lets the orchestrator surface a final summary toast. */
   onToast: (message: string, kind?: "success" | "error" | "info") => void;
   onCheckUrl: (id: string) => void | Promise<void>;
+  onEditUrl: (url: MonitoredUrl) => void;
   onRemoveUrl: (id: string) => void | Promise<void>;
   onCreateFlow: () => void;
   onEditFlow: (flow: Flow) => void;
@@ -541,8 +541,8 @@ export function ProjectView(props: Props) {
             refreshTick={refreshTick}
             windowMinutes={windowMinutes}
             onAddUrl={props.onAddUrl}
-            onManageKeys={props.onManageKeys}
             onCheckUrl={props.onCheckUrl}
+            onEditUrl={props.onEditUrl}
             onRemoveUrl={props.onRemoveUrl}
             onCheckAllUrls={props.onCheckAllUrls}
             checkAllUrlsBusy={props.checkAllUrlsBusy}
@@ -597,8 +597,8 @@ function UrlsSectionPanel(props: {
   refreshTick: number;
   windowMinutes: number;
   onAddUrl: () => void;
-  onManageKeys: () => void;
   onCheckUrl: (id: string) => void | Promise<void>;
+  onEditUrl: (url: MonitoredUrl) => void;
   onRemoveUrl: (id: string) => void | Promise<void>;
   onCheckAllUrls: () => void | Promise<void>;
   checkAllUrlsBusy: boolean;
@@ -623,8 +623,8 @@ function UrlsSectionPanel(props: {
     refreshTick,
     windowMinutes,
     onAddUrl,
-    onManageKeys,
     onCheckUrl,
+    onEditUrl,
     onRemoveUrl,
     totalPages,
     safePage,
@@ -642,9 +642,6 @@ function UrlsSectionPanel(props: {
           {search && <span className="muted small"> · "{search}"</span>}
         </h2>
         <div className="section-panel-actions">
-          <button className="ghost" onClick={onManageKeys}>
-            🔑 Manage keys ({project.apiKeys.length})
-          </button>
           <button className="primary" onClick={onAddUrl}>
             + Add URL
           </button>
@@ -756,6 +753,7 @@ function UrlsSectionPanel(props: {
                   refreshTick={refreshTick}
                   windowMinutes={windowMinutes}
                   onCheck={() => onCheckUrl(u.id)}
+                  onEdit={() => onEditUrl(u)}
                   onRemove={() => onRemoveUrl(u.id)}
                 />
               ))}

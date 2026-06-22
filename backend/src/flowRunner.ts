@@ -14,6 +14,7 @@ import {
   getFlowRun,
   getFlowWithSteps,
   getProject,
+  getProjectApiKeysScope,
   getProjectVariables,
   listFlowRuns,
   markFlowRunCompletedAt,
@@ -23,7 +24,7 @@ import {
 } from "./store.js";
 import { timedFetch } from "./timing.js";
 import { sendFlowFailureAlert } from "./slack.js";
-import { sendFlowFailureEmail } from "./email.js";
+import { classifyFailure, pickRecipients, sendFlowFailureEmail } from "./email.js";
 import type {
   ExtractedValue,
   Flow,
@@ -779,7 +780,10 @@ async function executeRun(
 ): Promise<FlowRun | undefined> {
   const project = getProject(flow.projectId);
 
+  // Phase 1.27.4 — apiKeysScope at the bottom of the merge so prereq-captured
+  // project vars and per-flow cache can override on name collision.
   const variables: Record<string, unknown> = {
+    ...getProjectApiKeysScope(flow.projectId),
     ...getProjectVariables(flow.projectId),
     ...getCachedVariables(flow.id),
   };
@@ -830,9 +834,16 @@ async function executeRun(
         previousReason !== currentReason; // failing for a NEW reason — escalate
 
       if (shouldAlert) {
+        // Phase 1.27.2 — classify the failed step's assertion mix and route
+        // a latency-only failure to the dedicated recipient list.
+        const failedStepResult = run.stepResults.find(
+          (sr) => sr.stepId === run.failedAtStepId
+        );
+        const category = classifyFailure(failedStepResult?.assertionResults ?? []);
+        const emailRecipients = pickRecipients(project, category);
         void Promise.allSettled([
           sendFlowFailureAlert(flow as Flow, run, project),
-          sendFlowFailureEmail(flow as Flow, run, project, failedStep),
+          sendFlowFailureEmail(flow as Flow, run, project, failedStep, emailRecipients),
         ]);
       }
     }

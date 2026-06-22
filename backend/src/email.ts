@@ -1,30 +1,83 @@
-import nodemailer, { type Transporter } from "nodemailer";
-import type { Flow, FlowRun, FlowStep, MonitoredUrl, Project, UrlStats } from "./types.js";
+/**
+ * Phase 1.27.8 — SMTP → AWS SES migration.
+ *
+ * All email goes through AWS SESv2 (`@aws-sdk/client-sesv2`). Nodemailer + SMTP
+ * are GONE. Credentials resolve via the standard AWS SDK chain:
+ *
+ *   1. Env vars: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN
+ *   2. Shared credentials file: ~/.aws/credentials (profile = AWS_PROFILE or "default")
+ *   3. IAM role: when running on EC2 / ECS / Lambda / EKS — no creds in env at all
+ *
+ * Required env to actually send:
+ *   - AWS_REGION             — e.g. "us-east-1"
+ *   - SES_FROM_EMAIL         — the verified SES sender (full From header allowed,
+ *                              e.g. 'Monitoring Suite <monitor@example.com>')
+ *
+ * Optional env:
+ *   - SES_CONFIGURATION_SET  — SES configuration set name (for engagement events,
+ *                              bounce/complaint topics, IP pool selection, etc.)
+ *
+ * If AWS_REGION + SES_FROM_EMAIL are not BOTH set, every send returns
+ *   { sent: false, reason: "SES not configured (...)" }
+ * and the rest of the monitoring loop keeps running normally — same graceful
+ * disable as the old SMTP path. Identical public API.
+ */
+import { readFile } from "node:fs/promises";
+import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
+import type {
+  AssertionResult,
+  Flow,
+  FlowRun,
+  FlowStep,
+  MonitoredUrl,
+  Project,
+  UrlStats,
+} from "./types.js";
 
-// ===== Transport (lazy singleton; re-evaluated lazily so test/dev restarts pick up .env edits) =====
-let cachedTransport: Transporter | null | undefined; // undefined = not yet probed, null = SMTP not configured
+export type FailureCategory = "latency" | "general";
 
-function getTransport(): Transporter | null {
-  if (cachedTransport !== undefined) return cachedTransport;
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-  if (!host || !user || !pass) {
-    cachedTransport = null;
+/**
+ * Phase 1.27.2 — classify a failure for routing to the latency-only or general
+ * recipient list. Returns "latency" iff EVERY failed assertion is of type
+ * `latency-under`. Unchanged from the SMTP-era implementation.
+ */
+export function classifyFailure(assertions: AssertionResult[]): FailureCategory {
+  const failed = assertions.filter((a) => !a.passed);
+  if (failed.length === 0) return "general";
+  return failed.every((a) => a.type === "latency-under") ? "latency" : "general";
+}
+
+export function pickRecipients(project: Project, category: FailureCategory): string {
+  if (category === "latency" && project.latencyFailureEmails?.trim()) {
+    return project.latencyFailureEmails;
+  }
+  return project.notificationEmails;
+}
+
+// ===== SES client (lazy singleton; re-evaluated lazily so tsx-watch restarts
+// pick up .env edits without a full process recycle every time) ============
+let cachedClient: SESv2Client | null | undefined; // undefined = not probed, null = not configured
+
+function getSesClient(): SESv2Client | null {
+  if (cachedClient !== undefined) return cachedClient;
+  const region = process.env.AWS_REGION;
+  const from = process.env.SES_FROM_EMAIL;
+  if (!region || !from) {
+    cachedClient = null;
     return null;
   }
-  cachedTransport = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465, // 465 = SMTPS, 587 = STARTTLS (auto-upgraded)
-    auth: { user, pass },
-  });
-  return cachedTransport;
+  // Credentials resolve via the default chain — no explicit args required.
+  cachedClient = new SESv2Client({ region });
+  return cachedClient;
 }
 
 function fromAddress(): string {
-  return process.env.SMTP_FROM || process.env.SMTP_USER || "";
+  return process.env.SES_FROM_EMAIL ?? "";
+}
+
+function configurationSet(): string | undefined {
+  const v = process.env.SES_CONFIGURATION_SET;
+  return v && v.trim() ? v.trim() : undefined;
 }
 
 function parseRecipients(raw: string | undefined | null): string[] {
@@ -44,24 +97,143 @@ async function sendMail(args: {
   html?: string;
   attachments?: Array<{ filename: string; path: string; contentType?: string }>;
 }): Promise<SendResult> {
-  const t = getTransport();
-  if (!t) return { sent: false, reason: "SMTP not configured" };
+  const client = getSesClient();
+  if (!client) {
+    return {
+      sent: false,
+      reason: "SES not configured (set AWS_REGION + SES_FROM_EMAIL in backend/.env)",
+    };
+  }
   if (args.to.length === 0) return { sent: false, reason: "no recipients" };
+
   try {
-    await t.sendMail({
-      from: fromAddress(),
-      to: args.to.join(", "),
-      subject: args.subject,
-      text: args.text,
-      html: args.html,
-      attachments: args.attachments,
-    });
+    const hasAttachments = (args.attachments?.length ?? 0) > 0;
+
+    // SES v2 supports two content shapes:
+    //   Simple — text + html only, SES handles all encoding (cheap path)
+    //   Raw    — full MIME blob, required for attachments (Audit HTML report)
+    const command = hasAttachments
+      ? new SendEmailCommand({
+          FromEmailAddress: fromAddress(),
+          Destination: { ToAddresses: args.to },
+          Content: { Raw: { Data: await buildRawMime(args) } },
+          ConfigurationSetName: configurationSet(),
+        })
+      : new SendEmailCommand({
+          FromEmailAddress: fromAddress(),
+          Destination: { ToAddresses: args.to },
+          Content: {
+            Simple: {
+              Subject: { Data: args.subject, Charset: "UTF-8" },
+              Body: {
+                Text: { Data: args.text, Charset: "UTF-8" },
+                ...(args.html
+                  ? { Html: { Data: args.html, Charset: "UTF-8" } }
+                  : {}),
+              },
+            },
+          },
+          ConfigurationSetName: configurationSet(),
+        });
+
+    await client.send(command);
     return { sent: true };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.warn("[email] sendMail failed:", msg);
+    console.warn("[email] SES send failed:", msg);
     return { sent: false, reason: msg };
   }
+}
+
+// ---------- Raw MIME builder (only used when there are attachments) --------
+//
+// Builds a multipart/mixed message:
+//   multipart/mixed
+//     multipart/alternative (text/plain + text/html)
+//     attachment 1
+//     attachment 2
+//     ...
+//
+// All parts base64-encoded for safety against long lines / non-ASCII content.
+// Lines are CRLF-terminated per RFC 5322.
+
+async function buildRawMime(args: {
+  to: string[];
+  subject: string;
+  text: string;
+  html?: string;
+  attachments?: Array<{ filename: string; path: string; contentType?: string }>;
+}): Promise<Uint8Array> {
+  const CRLF = "\r\n";
+  const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  const mixedBoundary = `MIX_${stamp}`;
+  const altBoundary = `ALT_${stamp}`;
+  const lines: string[] = [];
+
+  // Headers
+  lines.push(`From: ${fromAddress()}`);
+  lines.push(`To: ${args.to.join(", ")}`);
+  lines.push(`Subject: ${encodeHeaderValue(args.subject)}`);
+  lines.push("MIME-Version: 1.0");
+  lines.push(`Content-Type: multipart/mixed; boundary="${mixedBoundary}"`);
+  lines.push("");
+
+  // ---- Body part: alternative(text, html) ----
+  lines.push(`--${mixedBoundary}`);
+  lines.push(`Content-Type: multipart/alternative; boundary="${altBoundary}"`);
+  lines.push("");
+
+  lines.push(`--${altBoundary}`);
+  lines.push("Content-Type: text/plain; charset=UTF-8");
+  lines.push("Content-Transfer-Encoding: base64");
+  lines.push("");
+  lines.push(base64Wrap(Buffer.from(args.text, "utf-8")));
+  lines.push("");
+
+  if (args.html) {
+    lines.push(`--${altBoundary}`);
+    lines.push("Content-Type: text/html; charset=UTF-8");
+    lines.push("Content-Transfer-Encoding: base64");
+    lines.push("");
+    lines.push(base64Wrap(Buffer.from(args.html, "utf-8")));
+    lines.push("");
+  }
+
+  lines.push(`--${altBoundary}--`);
+  lines.push("");
+
+  // ---- Attachments ----
+  for (const att of args.attachments ?? []) {
+    const data = await readFile(att.path);
+    const ctype = att.contentType ?? "application/octet-stream";
+    const safeName = att.filename.replace(/"/g, "");
+    lines.push(`--${mixedBoundary}`);
+    lines.push(`Content-Type: ${ctype}; name="${safeName}"`);
+    lines.push(`Content-Disposition: attachment; filename="${safeName}"`);
+    lines.push("Content-Transfer-Encoding: base64");
+    lines.push("");
+    lines.push(base64Wrap(data));
+    lines.push("");
+  }
+
+  lines.push(`--${mixedBoundary}--`);
+  lines.push("");
+
+  return Buffer.from(lines.join(CRLF), "utf-8");
+}
+
+/** Wrap a base64 string into 76-char lines per RFC 2045. */
+function base64Wrap(buf: Buffer): string {
+  const b64 = buf.toString("base64");
+  // Insert CRLF every 76 chars (the canonical base64 line length for MIME).
+  return b64.match(/.{1,76}/g)?.join("\r\n") ?? "";
+}
+
+/** RFC 2047 encoded-word for non-ASCII headers (used for Subject). */
+function encodeHeaderValue(s: string): string {
+  // ASCII-only: emit as-is (still good).
+  if (/^[\x00-\x7F]*$/.test(s)) return s;
+  return `=?UTF-8?B?${Buffer.from(s, "utf-8").toString("base64")}?=`;
 }
 
 function escapeHtml(s: string): string {
@@ -76,9 +248,10 @@ function escapeHtml(s: string): string {
 // ===== Per-URL failure email (mirrors sendSlackAlert / formatAlert) =====
 export async function sendUrlFailureEmail(
   project: Project,
-  url: MonitoredUrl
+  url: MonitoredUrl,
+  recipientsOverride?: string
 ): Promise<SendResult> {
-  const to = parseRecipients(project.notificationEmails);
+  const to = parseRecipients(recipientsOverride ?? project.notificationEmails);
   if (to.length === 0) return { sent: false, reason: "no recipients" };
   const status = url.statusCode != null ? `HTTP ${url.statusCode}` : "no response";
   const reason = url.errorReason ?? "Unknown failure";
@@ -105,9 +278,10 @@ export async function sendFlowFailureEmail(
   flow: Flow,
   run: FlowRun,
   project: Project,
-  failedStep: FlowStep | null = null
+  failedStep: FlowStep | null = null,
+  recipientsOverride?: string
 ): Promise<SendResult> {
-  const to = parseRecipients(project.notificationEmails);
+  const to = parseRecipients(recipientsOverride ?? project.notificationEmails);
   if (to.length === 0) return { sent: false, reason: "no recipients" };
   const failedStepResult = run.stepResults.find((sr) => sr.stepId === run.failedAtStepId);
   const failedStepLabel = failedStepResult

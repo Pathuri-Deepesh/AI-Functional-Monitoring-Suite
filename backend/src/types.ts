@@ -39,8 +39,13 @@ export interface Project {
   name: string;
   description: string;
   slackWebhookUrl: string;
-  /** Comma/semicolon/newline-separated email recipients for failure + audit notifications. */
+  /** Comma/semicolon/newline-separated email recipients for general (non-latency) failures + audit notifications. */
   notificationEmails: string;
+  /**
+   * Phase 1.27.2 — recipients for failures caused solely by the `latency-under` assertion.
+   * Empty string = no dedicated latency channel; those failures fall back to `notificationEmails`.
+   */
+  latencyFailureEmails: string;
   apiKeys: ApiKey[];
   /** Interval (minutes) at which the prereq chain auto-runs. 0 = disabled (manual only). */
   prereqIntervalMinutes: number;
@@ -102,6 +107,14 @@ export interface MonitoredUrl {
   assertions: Assertion[];
   customHeaders: KeyValue[];
   queryParams: KeyValue[];
+
+  // Phase 1.27.3 — Per-URL retry / wait. 0 = single-shot (pre-1.27.3 behaviour).
+  /** Delay before the first attempt, in ms. Useful for eventually-consistent endpoints. */
+  waitBeforeMs: number;
+  /** Number of EXTRA attempts after the initial one (0 = no retries). */
+  maxRetries: number;
+  /** Initial backoff between retries, doubled after each failed attempt. */
+  retryBackoffMs: number;
 
   // Phase 1.26 — Swagger import provenance. NULL = manually created.
   // importSource = operationId if set, else `${METHOD} ${pathTemplate}` — stable

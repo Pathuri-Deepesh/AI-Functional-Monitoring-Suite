@@ -1,0 +1,16 @@
+{
+  "name": "ai-functional-monitoring-suite",
+  "version": "1.27.10",
+  "private": true,
+  "description": "Self-hosted API monitoring suite — backend + frontend, bundled for single-server deployment.",
+  "scripts": {
+    "install:all": "npm --prefix backend install && npm --prefix frontend install",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "build:frontend": "npm --prefix frontend run build",
+    "build:copy": "node scripts/copy-frontend-to-backend.mjs",
+    "build": "npm run build:frontend && npm run build:copy",
+    "start": "npm --prefix backend start",
+    "clean": "node -e \"const fs=require('node:fs');for(const d of ['backend/public','frontend/dist']){try{fs.rmSync(d,{recursive:true,force:true});console.log('removed',d)}catch{}}\""
+  }
+}
