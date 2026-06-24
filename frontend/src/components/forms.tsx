@@ -19,6 +19,7 @@ import type {
   ProjectVariable,
 } from "../types";
 import { BinaryBodyEditor } from "./BinaryBodyEditor";
+import { ConfirmDialog } from "./Modal";
 import { useTheme, type ThemePref } from "../theme";
 import { slugifyKeyName } from "../slugify";
 
@@ -794,6 +795,10 @@ export function ApiKeyManagerForm(
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [keysVersion, setKeysVersion] = useState(0);
+  // When set, the in-app ConfirmDialog is shown for this key. Replaces the
+  // native window.confirm() that used to fire here — same flow, polished UX.
+  const [confirmRemove, setConfirmRemove] = useState<{ id: string; name: string } | null>(null);
+  const [removingKey, setRemovingKey] = useState(false);
 
   async function add(e: React.FormEvent) {
     e.preventDefault();
@@ -813,11 +818,18 @@ export function ApiKeyManagerForm(
     }
   }
 
-  async function remove(keyId: string, keyName: string) {
-    if (!window.confirm(`Remove key "${keyName}"? URLs using it will lose authentication.`)) return;
-    await removeApiKey(props.project.id, keyId);
-    setKeysVersion((v) => v + 1);
-    await props.onDone(`Removed key "${keyName}"`);
+  async function performRemove() {
+    if (!confirmRemove) return;
+    const { id, name } = confirmRemove;
+    setRemovingKey(true);
+    try {
+      await removeApiKey(props.project.id, id);
+      setKeysVersion((v) => v + 1);
+      await props.onDone(`Removed key "${name}"`);
+    } finally {
+      setRemovingKey(false);
+      setConfirmRemove(null);
+    }
   }
 
   return (
@@ -826,7 +838,7 @@ export function ApiKeyManagerForm(
       {props.project.apiKeys.length === 0 ? (
         <div className="empty-inline">No keys yet. Add one below.</div>
       ) : (
-        <div className="key-list" key={keysVersion}>
+        <div className="key-list">
           {props.project.apiKeys.map((k) => (
             <div className="key-row" key={k.id}>
               <div>
@@ -844,7 +856,7 @@ export function ApiKeyManagerForm(
               <button
                 type="button"
                 className="ghost destructive small"
-                onClick={() => remove(k.id, k.name)}
+                onClick={() => setConfirmRemove({ id: k.id, name: k.name })}
               >
                 Remove
               </button>
@@ -958,6 +970,21 @@ export function ApiKeyManagerForm(
           </button>
         </div>
       </form>
+      <ConfirmDialog
+        open={confirmRemove !== null}
+        title="Remove API key?"
+        message={
+          confirmRemove
+            ? `Remove key "${confirmRemove.name}"? URLs using it will lose authentication on their next check.`
+            : ""
+        }
+        confirmLabel="Remove key"
+        destructive
+        busy={removingKey}
+        busyLabel="Removing…"
+        onConfirm={performRemove}
+        onCancel={() => setConfirmRemove(null)}
+      />
     </div>
   );
 }

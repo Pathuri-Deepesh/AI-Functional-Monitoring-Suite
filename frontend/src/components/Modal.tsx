@@ -63,6 +63,11 @@ export function ConfirmDialog(props: {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  /** When true, both buttons are disabled, the modal can't be closed, and the
+   *  confirm button shows a busy label ("⏳ Deleting…") so the user knows the
+   *  action is in progress (matters when the backend cascade-delete is slow). */
+  busy?: boolean;
+  busyLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -73,18 +78,28 @@ export function ConfirmDialog(props: {
     confirmLabel = "Confirm",
     cancelLabel = "Cancel",
     destructive,
+    busy = false,
+    busyLabel,
     onConfirm,
     onCancel,
   } = props;
+  // While busy, ignore backdrop/Escape close so the user can't accidentally
+  // walk away mid-operation thinking it didn't fire.
+  const handleClose = busy ? () => {} : onCancel;
   return (
-    <Modal open={open} title={title} onClose={onCancel} size="sm">
+    <Modal open={open} title={title} onClose={handleClose} size="sm">
       <p className="confirm-message">{message}</p>
       <div className="modal-actions">
-        <button className="ghost" onClick={onCancel}>
+        <button className="ghost" onClick={onCancel} disabled={busy}>
           {cancelLabel}
         </button>
-        <button className={destructive ? "destructive" : "primary"} onClick={onConfirm} autoFocus>
-          {confirmLabel}
+        <button
+          className={destructive ? "destructive" : "primary"}
+          onClick={onConfirm}
+          autoFocus
+          disabled={busy}
+        >
+          {busy ? `⏳ ${busyLabel ?? "Working…"}` : confirmLabel}
         </button>
       </div>
     </Modal>

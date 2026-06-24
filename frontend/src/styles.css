@@ -38,8 +38,8 @@
   --panel: #131922;
   --panel-2: #1a212d;
   --panel-3: #232b39;
-  --border: #262f3e;
-  --border-strong: #36405a;
+  --border: #38445c;
+  --border-strong: #4b587a;
   --text: #e2e8f0;
   --text-strong: #f8fafc;
   --muted: #94a3b8;
@@ -70,8 +70,8 @@
   --panel: #131922;
   --panel-2: #1a212d;
   --panel-3: #232b39;
-  --border: #262f3e;
-  --border-strong: #36405a;
+  --border: #38445c;
+  --border-strong: #4b587a;
   --text: #e2e8f0;
   --text-strong: #f8fafc;
   --muted: #94a3b8;
@@ -102,8 +102,8 @@
   --panel: #ffffff;
   --panel-2: #f1f5f9;
   --panel-3: #e2e8f0;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
+  --border: #cbd5e1;
+  --border-strong: #94a3b8;
   --text: #1e293b;
   --text-strong: #0f172a;
   --muted: #64748b;
@@ -439,11 +439,14 @@ a {
   text-align: left;
   cursor: pointer;
   color: var(--text);
-  transition: transform var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--t-fast), border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
 }
 .stat-card:hover {
   transform: translateY(-2px);
   background: var(--panel-2);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
 }
 .stat-card.active {
   border-color: var(--accent);
@@ -910,8 +913,30 @@ input::placeholder { color: var(--muted-2); }
   gap: var(--s-3);
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: var(--s-3);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-4);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+.key-row:hover {
+  border-color: var(--accent, #6366f1);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(99, 102, 241, 0.25) inset;
+  transform: translateY(-1px);
+}
+
+[data-theme="light"] .key-row {
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.06),
+    0 0 0 1px rgba(15, 23, 42, 0.02) inset;
+}
+[data-theme="light"] .key-row:hover {
+  box-shadow:
+    0 4px 12px rgba(15, 23, 42, 0.10),
+    0 0 0 1px rgba(99, 102, 241, 0.20) inset;
 }
 
 .key-name { font-weight: 500; font-size: var(--text-md); color: var(--text-strong); }

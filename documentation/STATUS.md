@@ -2,13 +2,17 @@
 
 > 1-pager snapshot of where the project is **right now**. Updated after every shipped phase. For the stable map of the system see [ARCHITECTURE.md](ARCHITECTURE.md); for the full history see [PROGRESS.md](PROGRESS.md).
 
-**Last updated:** 2026-06-12
+**Last updated:** 2026-06-24
 **Owner:** Deepesh P · **Company:** Logitech
 **Branch:** `main` (GitHub) · `main` *(GitLab default is `master` — needs settings access to switch)*
 
 ---
 
 ## Current phase
+
+**Phase 1.27.12 — API Keys list duplicate-render fix** ✅ Shipped 2026-06-24
+
+User reported existing API keys visually doubling on the API Keys settings panel right after adding a new key — refresh cleared the duplication. Root cause: in [`ApiKeyManagerForm`](../frontend/src/components/forms.tsx), `add()` bumped `keysVersion` synchronously before `await props.onDone(...)` resolved, and `keysVersion` was the `key={...}` on BOTH the existing-keys list and the form below. The form remount was intentional (defeats Chrome/Edge/Safari autofill clobbering the cleared inputs, per the comment at lines 874–885) — the list remount was an accident. Bumping the list's key forced React to remount the list while `props.project.apiKeys` was still the stale pre-add array (parent's `await refresh()` hadn't returned), so the old rows rendered in the fresh container alongside the in-flight render. Fix: removed `key={keysVersion}` from the list `<div>` only (rows are already uniquely keyed by `k.id`); kept the form's `key={keysVersion}` untouched. Rebuilt + restarted the single-server bundle; verified via `npm run build` + `npm start` — listening on http://127.0.0.1:4000. Bumped `package.json` to 1.27.12 (also captures the prior 1.27.11 SSRF-lookup + UI alignment fixes that hadn't bumped).
 
 **Phase 1.27.10 — Single-server bundle + entry-file rename** ✅ Shipped 2026-06-22
 

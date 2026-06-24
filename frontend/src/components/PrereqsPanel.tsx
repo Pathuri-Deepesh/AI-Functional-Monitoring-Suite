@@ -40,6 +40,7 @@ import type {
 import { checkStepVarRefs } from "../utils/varRefs";
 import { formatLatency, formatRelative } from "../utils/format";
 import { GripIcon, StepDragPreview } from "./StepDragHandle";
+import { ConfirmDialog } from "./Modal";
 
 const POLL_MS = 500;
 const POLL_TIMEOUT_MS = 5 * 60_000;
@@ -80,6 +81,10 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
   const expandedBeforeRun = useRef<boolean | null>(null);
   // dnd-kit DnD state — `activeDragId` drives the floating DragOverlay preview.
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  // In-app ConfirmDialog state for "Clear all captured variables" — replaces
+  // the native window.confirm() that used to fire here.
+  const [confirmClearVars, setConfirmClearVars] = useState(false);
+  const [clearingVars, setClearingVars] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -217,13 +222,20 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
     }
   }
 
-  async function handleClearVars() {
-    if (!window.confirm("Clear all captured variables? URLs that reference them will fail until the chain runs again.")) {
-      return;
+  function handleClearVars() {
+    setConfirmClearVars(true);
+  }
+
+  async function performClearVars() {
+    setClearingVars(true);
+    try {
+      await clearProjectVariables(project.id);
+      await load();
+      onAfterRun?.();
+    } finally {
+      setClearingVars(false);
+      setConfirmClearVars(false);
     }
-    await clearProjectVariables(project.id);
-    await load();
-    onAfterRun?.();
   }
 
   const steps = bundle?.steps ?? [];
@@ -436,6 +448,17 @@ export function PrereqsPanel({ project, onAddStep, onEditStep, refreshTick, onAf
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={confirmClearVars}
+        title="Clear captured variables?"
+        message="Clear all captured variables for this project? URLs and flows that reference them via {{var}} will fail until the prereq chain runs again."
+        confirmLabel="Clear variables"
+        destructive
+        busy={clearingVars}
+        busyLabel="Clearing…"
+        onConfirm={performClearVars}
+        onCancel={() => setConfirmClearVars(false)}
+      />
     </section>
   );
 }

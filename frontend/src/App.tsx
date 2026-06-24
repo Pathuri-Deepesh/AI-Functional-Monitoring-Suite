@@ -154,6 +154,10 @@ export default function App() {
   const [modal, setModal] = useState<ModalState>({ kind: "none" });
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [refreshTick, setRefreshTick] = useState(0);
+  // True while the confirm-delete-project flow is awaiting the backend cascade
+  // delete + snapshot refresh. Drives ConfirmDialog's busy state so the user
+  // sees "⏳ Deleting…" instead of a frozen modal during big-project deletes.
+  const [deletingProject, setDeletingProject] = useState(false);
   const [busyCheckUrls, setBusyCheckUrls] = useState<string | null>(null);
   const toastSeq = useRef(0);
   const timer = useRef<number | null>(null);
@@ -445,6 +449,7 @@ export default function App() {
 
   async function confirmDeleteProject() {
     if (modal.kind !== "confirm-delete-project") return;
+    setDeletingProject(true);
     try {
       await deleteProject(modal.project.id);
       pushToast(`Deleted "${modal.project.name}"`);
@@ -452,6 +457,7 @@ export default function App() {
     } catch (e) {
       pushToast(e instanceof Error ? e.message : "Failed to delete", "error");
     } finally {
+      setDeletingProject(false);
       setModal({ kind: "none" });
     }
   }
@@ -688,6 +694,8 @@ export default function App() {
         }
         confirmLabel="Delete project"
         destructive
+        busy={deletingProject}
+        busyLabel="Deleting project + URL history…"
         onConfirm={confirmDeleteProject}
         onCancel={() => setModal({ kind: "none" })}
       />
