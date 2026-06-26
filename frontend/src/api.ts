@@ -67,6 +67,7 @@ export async function updateProject(
       | "name"
       | "description"
       | "slackWebhookUrl"
+      | "latencySlackWebhookUrl"
       | "notificationEmails"
       | "latencyFailureEmails"
       | "prereqIntervalMinutes"

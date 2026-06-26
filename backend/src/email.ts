@@ -54,6 +54,19 @@ export function pickRecipients(project: Project, category: FailureCategory): str
   return project.notificationEmails;
 }
 
+/**
+ * Phase 1.27.13 — Slack twin of pickRecipients. Latency-only failures route to
+ * `latencySlackWebhookUrl` when populated; everything else (including latency
+ * failures when the dedicated webhook is empty) routes to `slackWebhookUrl`.
+ * Returns "" when neither is configured — callers should early-return on that.
+ */
+export function pickSlackWebhook(project: Project, category: FailureCategory): string {
+  if (category === "latency" && project.latencySlackWebhookUrl?.trim()) {
+    return project.latencySlackWebhookUrl;
+  }
+  return project.slackWebhookUrl;
+}
+
 // ===== SES client (lazy singleton; re-evaluated lazily so tsx-watch restarts
 // pick up .env edits without a full process recycle every time) ============
 let cachedClient: SESv2Client | null | undefined; // undefined = not probed, null = not configured

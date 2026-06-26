@@ -345,6 +345,12 @@ function initSchema(d: DatabaseSync): void {
   // (perf-owner) audience. Empty = fall back to the general list.
   ensureColumn(d, "projects", "latency_failure_emails", "latency_failure_emails TEXT NOT NULL DEFAULT ''");
 
+  // Phase 1.27.13 — Dual-channel Slack webhook (mirrors the email model).
+  // slack_webhook_url stays the GENERAL Slack channel. latency_slack_webhook_url
+  // routes latency-only failures to a dedicated perf-owner channel; empty falls
+  // back to the general webhook. Audit/snapshot posts still use the general one.
+  ensureColumn(d, "projects", "latency_slack_webhook_url", "latency_slack_webhook_url TEXT NOT NULL DEFAULT ''");
+
   // Phase 1.27.3 — Per-URL retry / wait. Defaults of 0 preserve the pre-1.27.3
   // single-shot behaviour. waitBeforeMs delays the first attempt; maxRetries
   // is the number of EXTRA attempts after the initial one (0 = no retries);

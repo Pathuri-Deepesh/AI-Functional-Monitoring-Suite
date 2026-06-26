@@ -1,6 +1,6 @@
 {
   "name": "ai-functional-monitoring-suite",
-  "version": "1.27.12",
+  "version": "1.27.13",
   "private": true,
   "description": "Self-hosted API monitoring suite — backend + frontend, bundled for single-server deployment.",
   "scripts": {

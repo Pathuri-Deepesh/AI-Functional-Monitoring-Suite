@@ -1,6 +1,6 @@
 import { reasonForError, reasonForStatus } from "./errorReason.js";
 import { sendSlackAlert } from "./slack.js";
-import { classifyFailure, pickRecipients, sendUrlFailureEmail } from "./email.js";
+import { classifyFailure, pickRecipients, pickSlackWebhook, sendUrlFailureEmail } from "./email.js";
 import { evaluateAssertions } from "./assertions.js";
 import {
   getProject,
@@ -162,9 +162,11 @@ async function doCheck(urlId: string): Promise<MonitoredUrl | undefined> {
   if (isFailingNow && !wasFailing && project) {
     const category = classifyFailure(assertionResults);
     const emailRecipients = pickRecipients(project, category);
+    // Phase 1.27.13 — Slack webhook now picked by category, mirroring email.
+    const slackWebhook = pickSlackWebhook(project, category);
     void Promise.allSettled([
-      project.slackWebhookUrl
-        ? sendSlackAlert(project.slackWebhookUrl, project, updated)
+      slackWebhook
+        ? sendSlackAlert(slackWebhook, project, updated)
         : Promise.resolve(),
       sendUrlFailureEmail(project, updated, emailRecipients),
     ]);

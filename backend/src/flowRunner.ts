@@ -24,7 +24,7 @@ import {
 } from "./store.js";
 import { timedFetch } from "./timing.js";
 import { sendFlowFailureAlert } from "./slack.js";
-import { classifyFailure, pickRecipients, sendFlowFailureEmail } from "./email.js";
+import { classifyFailure, pickRecipients, pickSlackWebhook, sendFlowFailureEmail } from "./email.js";
 import type {
   ExtractedValue,
   Flow,
@@ -841,8 +841,10 @@ async function executeRun(
         );
         const category = classifyFailure(failedStepResult?.assertionResults ?? []);
         const emailRecipients = pickRecipients(project, category);
+        // Phase 1.27.13 — Slack picked by category, mirroring email routing.
+        const slackWebhook = pickSlackWebhook(project, category);
         void Promise.allSettled([
-          sendFlowFailureAlert(flow as Flow, run, project),
+          sendFlowFailureAlert(slackWebhook, flow as Flow, run, project),
           sendFlowFailureEmail(flow as Flow, run, project, failedStep, emailRecipients),
         ]);
       }

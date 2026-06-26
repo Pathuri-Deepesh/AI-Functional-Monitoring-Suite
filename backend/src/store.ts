@@ -38,6 +38,7 @@ interface ProjectRow {
   name: string;
   description: string;
   slack_webhook_url: string;
+  latency_slack_webhook_url: string;
   notification_emails: string;
   latency_failure_emails: string;
   prereq_interval_minutes: number;
@@ -123,6 +124,7 @@ function rowToProject(r: ProjectRow): Project {
     name: r.name,
     description: r.description,
     slackWebhookUrl: r.slack_webhook_url,
+    latencySlackWebhookUrl: r.latency_slack_webhook_url ?? "",
     notificationEmails: r.notification_emails ?? "",
     latencyFailureEmails: r.latency_failure_emails ?? "",
     apiKeys: keys.map(rowToApiKey),
@@ -243,6 +245,7 @@ export function updateProject(
       | "name"
       | "description"
       | "slackWebhookUrl"
+      | "latencySlackWebhookUrl"
       | "notificationEmails"
       | "latencyFailureEmails"
       | "prereqIntervalMinutes"
@@ -255,8 +258,8 @@ export function updateProject(
   db()
     .prepare(
       `UPDATE projects
-       SET name = ?, description = ?, slack_webhook_url = ?, notification_emails = ?,
-           latency_failure_emails = ?,
+       SET name = ?, description = ?, slack_webhook_url = ?, latency_slack_webhook_url = ?,
+           notification_emails = ?, latency_failure_emails = ?,
            prereq_interval_minutes = ?, prereq_enabled = ?
        WHERE id = ?`
     )
@@ -264,6 +267,7 @@ export function updateProject(
       patch.name ?? existing.name,
       patch.description ?? existing.description,
       patch.slackWebhookUrl ?? existing.slackWebhookUrl,
+      patch.latencySlackWebhookUrl ?? existing.latencySlackWebhookUrl,
       patch.notificationEmails ?? existing.notificationEmails,
       patch.latencyFailureEmails ?? existing.latencyFailureEmails,
       Math.max(1, Math.min(60 * 24, Number(patch.prereqIntervalMinutes ?? existing.prereqIntervalMinutes))),

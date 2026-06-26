@@ -1187,77 +1187,135 @@ function GeneralPanel(
 // Keeps BOTH textareas' state alive in the parent — only the selected one is
 // rendered. Save still persists both. Per user request: "dont show both fields,
 // show only the selected one which we will be selecting in a dropdown".
-function ChannelPickerAndEditor(props: {
-  notificationEmails: string;
-  latencyFailureEmails: string;
-  onChangeGeneral: (v: string) => void;
-  onChangeLatency: (v: string) => void;
+/**
+ * Phase 1.27.13 — NotificationChannelEditor unifies Slack + Email behind a
+ * single General/Latency pill selector. Picking a pill swaps BOTH the slack
+ * webhook input and the recipients textarea below it. Mirrors the backend's
+ * dual-channel routing model (slack + email both pick by failure category).
+ */
+function NotificationChannelEditor(props: {
+  generalSlack: string;
+  latencySlack: string;
+  generalEmails: string;
+  latencyEmails: string;
+  onChangeGeneralSlack: (v: string) => void;
+  onChangeLatencySlack: (v: string) => void;
+  onChangeGeneralEmails: (v: string) => void;
+  onChangeLatencyEmails: (v: string) => void;
 }) {
   type Channel = "general" | "latency";
   const [channel, setChannel] = useState<Channel>("general");
 
-  const generalCount = countRecipients(props.notificationEmails);
-  const latencyCount = countRecipients(props.latencyFailureEmails);
+  const generalEmailCount = countRecipients(props.generalEmails);
+  const latencyEmailCount = countRecipients(props.latencyEmails);
+  const generalSlackOn = (props.generalSlack ?? "").trim().length > 0;
+  const latencySlackOn = (props.latencySlack ?? "").trim().length > 0;
+
+  function slackSubFor(active: "general" | "latency"): string {
+    if (active === "general") {
+      return generalSlackOn ? "slack on" : "no slack";
+    }
+    if (latencySlackOn) return "slack on";
+    return generalSlackOn ? "slack → general" : "no slack";
+  }
+
+  function emailSubFor(active: "general" | "latency"): string {
+    const n = active === "general" ? generalEmailCount : latencyEmailCount;
+    if (n === 0 && active === "latency") {
+      return generalEmailCount > 0 ? "emails → general" : "no emails";
+    }
+    return `${n} ${n === 1 ? "email" : "emails"}`;
+  }
+
+  const pills: Array<{ value: Channel; title: string }> = [
+    { value: "general", title: "General" },
+    { value: "latency", title: "Latency" },
+  ];
 
   return (
     <>
-      <div className="channel-picker">
-        <label className="channel-picker-label" htmlFor="notif-channel-select">
-          Channel to edit
-        </label>
-        <select
-          id="notif-channel-select"
-          value={channel}
-          onChange={(e) => setChannel(e.target.value as Channel)}
-        >
-          <option value="general">
-            General failure emails {generalCount > 0 ? `(${generalCount})` : ""}
-          </option>
-          <option value="latency">
-            Latency failure emails {latencyCount > 0 ? `(${latencyCount})` : ""}
-          </option>
-        </select>
+      <div className="notif-channel-pills" role="tablist" aria-label="Notification channel">
+        {pills.map((p) => {
+          const active = channel === p.value;
+          return (
+            <button
+              key={p.value}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              className={`notif-channel-pill ${active ? "active" : ""}`}
+              onClick={() => setChannel(p.value)}
+            >
+              <span className="pill-title">{p.title}</span>
+              <span className="pill-sub">
+                {slackSubFor(p.value)} · {emailSubFor(p.value)}
+              </span>
+            </button>
+          );
+        })}
       </div>
+
+      <p className="channel-info-line" style={{ marginTop: 0 }}>
+        {channel === "general" ? (
+          <>
+            <strong>General channel</strong>
+            <span>· any non-latency failure + Snapshot/Report</span>
+          </>
+        ) : (
+          <>
+            <strong>Latency channel</strong>
+            <span>· only `latency-under` assertion failures</span>
+          </>
+        )}
+      </p>
 
       {channel === "general" ? (
         <>
-          <p className="channel-info-line">
-            <strong>General failure emails</strong>
-            <span>· any non-latency failure + Snapshot/Report</span>
-            <span className={`channel-count ${generalCount === 0 ? "empty" : ""}`}>
-              {generalCount} {generalCount === 1 ? "recipient" : "recipients"}
-            </span>
-          </p>
           <Field
-            label="Recipients"
-            hint="Comma / semicolon / newline separated. Sent on 4xx, 5xx, network errors, body-contains, status-assertion failures + Snapshot/Report button. SMTP must be configured in backend .env."
+            label="Slack webhook URL (General)"
+            hint="Used for instant single-URL/flow failure alerts on non-latency failures + audit summaries. Leave empty to disable Slack for this channel."
+          >
+            <input
+              type="text"
+              placeholder="https://hooks.slack.com/services/..."
+              value={props.generalSlack}
+              onChange={(e) => props.onChangeGeneralSlack(e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Email recipients (General)"
+            hint="Comma / semicolon / newline separated. Sent on 4xx, 5xx, network errors, body-contains, status-assertion failures + Snapshot/Report button. SES must be configured in backend .env."
           >
             <textarea
               rows={5}
               placeholder="oncall@example.com, alice@example.com"
-              value={props.notificationEmails}
-              onChange={(e) => props.onChangeGeneral(e.target.value)}
+              value={props.generalEmails}
+              onChange={(e) => props.onChangeGeneralEmails(e.target.value)}
             />
           </Field>
         </>
       ) : (
         <>
-          <p className="channel-info-line">
-            <strong>Latency failure emails</strong>
-            <span>· only `latency-under` assertion failures</span>
-            <span className={`channel-count ${latencyCount === 0 ? "empty" : ""}`}>
-              {latencyCount} {latencyCount === 1 ? "recipient" : "recipients"}
-            </span>
-          </p>
           <Field
-            label="Recipients"
-            hint="Only used when a failure was caused solely by a `latency-under` assertion. Leave empty to send latency failures to the General list."
+            label="Slack webhook URL (Latency)"
+            hint="Only used when a failure was caused solely by a `latency-under` assertion. Leave empty to send latency Slack alerts to the General webhook."
+          >
+            <input
+              type="text"
+              placeholder="https://hooks.slack.com/services/..."
+              value={props.latencySlack}
+              onChange={(e) => props.onChangeLatencySlack(e.target.value)}
+            />
+          </Field>
+          <Field
+            label="Email recipients (Latency)"
+            hint="Only used when a failure was caused solely by a `latency-under` assertion. Leave empty to send latency emails to the General list."
           >
             <textarea
               rows={5}
               placeholder="perf-owners@example.com"
-              value={props.latencyFailureEmails}
-              onChange={(e) => props.onChangeLatency(e.target.value)}
+              value={props.latencyEmails}
+              onChange={(e) => props.onChangeLatencyEmails(e.target.value)}
             />
           </Field>
         </>
@@ -1285,6 +1343,9 @@ function NotificationsPanel(
   const [slackWebhook, setSlackWebhook] = useState(
     props.project.slackWebhookUrl ?? ""
   );
+  const [latencySlackWebhook, setLatencySlackWebhook] = useState(
+    props.project.latencySlackWebhookUrl ?? ""
+  );
   const [notificationEmails, setNotificationEmails] = useState(
     props.project.notificationEmails ?? ""
   );
@@ -1299,11 +1360,13 @@ function NotificationsPanel(
   // toast success but the textarea would keep showing the pre-save value.
   useEffect(() => {
     setSlackWebhook(props.project.slackWebhookUrl ?? "");
+    setLatencySlackWebhook(props.project.latencySlackWebhookUrl ?? "");
     setNotificationEmails(props.project.notificationEmails ?? "");
     setLatencyFailureEmails(props.project.latencyFailureEmails ?? "");
   }, [
     props.project.id,
     props.project.slackWebhookUrl,
+    props.project.latencySlackWebhookUrl,
     props.project.notificationEmails,
     props.project.latencyFailureEmails,
   ]);
@@ -1314,11 +1377,13 @@ function NotificationsPanel(
     setErr(null);
     try {
       const slackTrim = (slackWebhook ?? "").trim();
+      const latencySlackTrim = (latencySlackWebhook ?? "").trim();
       const notifTrim = (notificationEmails ?? "").trim();
       const latencyTrim = (latencyFailureEmails ?? "").trim();
 
       const updated = await updateProject(props.project.id, {
         slackWebhookUrl: slackTrim,
+        latencySlackWebhookUrl: latencySlackTrim,
         notificationEmails: notifTrim,
         latencyFailureEmails: latencyTrim,
       });
@@ -1339,11 +1404,21 @@ function NotificationsPanel(
             `Stop the backend (Ctrl+C in the backend terminal) and run "npm run dev" again.`
         );
       }
+      // Same round-trip check for the Phase 1.27.13 latency slack column.
+      const gotSlack = (updated.latencySlackWebhookUrl ?? "").trim();
+      if (latencySlackTrim && gotSlack !== latencySlackTrim) {
+        throw new Error(
+          `Backend didn't persist the Latency Slack webhook. Sent "${latencySlackTrim}" but received "${gotSlack}". ` +
+            `This almost always means the backend was started before the column migration ran. ` +
+            `Stop the backend (Ctrl+C in the backend terminal) and run "npm run dev" again.`
+        );
+      }
 
       // Sync local state immediately from the server response, so we don't
       // depend on the next 3-second poll catching up before the user navigates
       // away. props re-flow on the next refresh will then be a no-op.
       setSlackWebhook(updated.slackWebhookUrl ?? "");
+      setLatencySlackWebhook(updated.latencySlackWebhookUrl ?? "");
       setNotificationEmails(updated.notificationEmails ?? "");
       setLatencyFailureEmails(updated.latencyFailureEmails ?? "");
 
@@ -1358,26 +1433,21 @@ function NotificationsPanel(
   return (
     <form className="form" onSubmit={save}>
       <h4 className="settings-panel-title">Notifications</h4>
+      <p className="sub small" style={{ marginTop: -4, marginBottom: 12, color: "var(--muted)" }}>
+        Pick a channel below to edit its Slack webhook and email recipients
+        together. Latency-only failures use the Latency channel when populated;
+        everything else uses General.
+      </p>
 
-      <Field
-        label="Slack webhook URL"
-        hint="Used for instant single-URL failure alerts + audit summaries. Leave empty to disable."
-      >
-        <input
-          type="text"
-          placeholder="https://hooks.slack.com/services/..."
-          value={slackWebhook}
-          onChange={(e) => setSlackWebhook(e.target.value)}
-        />
-      </Field>
-
-      <h4 className="section-h">📧 Email recipients</h4>
-
-      <ChannelPickerAndEditor
-        notificationEmails={notificationEmails}
-        latencyFailureEmails={latencyFailureEmails}
-        onChangeGeneral={setNotificationEmails}
-        onChangeLatency={setLatencyFailureEmails}
+      <NotificationChannelEditor
+        generalSlack={slackWebhook}
+        latencySlack={latencySlackWebhook}
+        generalEmails={notificationEmails}
+        latencyEmails={latencyFailureEmails}
+        onChangeGeneralSlack={setSlackWebhook}
+        onChangeLatencySlack={setLatencySlackWebhook}
+        onChangeGeneralEmails={setNotificationEmails}
+        onChangeLatencyEmails={setLatencyFailureEmails}
       />
 
       {err && <div className="inline-error">{err}</div>}

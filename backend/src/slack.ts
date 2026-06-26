@@ -35,12 +35,15 @@ function formatAlert(project: Project, url: MonitoredUrl): string {
 }
 
 // ===== Per-flow failure alert (uses webhook) =====
+// Phase 1.27.13 — accepts an explicit webhookUrl so the caller can pick
+// general vs latency channel via pickSlackWebhook(). Returns early on empty.
 export async function sendFlowFailureAlert(
+  webhookUrl: string,
   flow: Flow,
   run: FlowRun,
   project: Project
 ): Promise<void> {
-  if (!project.slackWebhookUrl) return;
+  if (!webhookUrl) return;
   const failedStep = run.stepResults.find((sr) => sr.stepId === run.failedAtStepId);
   const failedStepLabel = failedStep
     ? `step ${failedStep.position} (${failedStep.statusCode ? `HTTP ${failedStep.statusCode}` : "no response"})`
@@ -55,7 +58,7 @@ export async function sendFlowFailureAlert(
     `*Time:* ${new Date(run.startedAt).toISOString()}`,
   ].join("\n");
   try {
-    await fetch(project.slackWebhookUrl, {
+    await fetch(webhookUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),

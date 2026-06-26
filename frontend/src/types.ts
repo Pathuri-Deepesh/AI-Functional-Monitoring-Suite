@@ -30,6 +30,8 @@ export interface Project {
   name: string;
   description: string;
   slackWebhookUrl: string;
+  /** Phase 1.27.13 — dedicated Slack webhook for latency-only failures. Empty = use general webhook. */
+  latencySlackWebhookUrl: string;
   /** Comma/semicolon/newline-separated email recipients for general (non-latency) failures + audit notifications. */
   notificationEmails: string;
   /** Phase 1.27.2 — recipients for failures caused solely by `latency-under` assertions. Empty = use general list. */

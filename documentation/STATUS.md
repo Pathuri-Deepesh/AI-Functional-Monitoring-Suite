@@ -2,13 +2,17 @@
 
 > 1-pager snapshot of where the project is **right now**. Updated after every shipped phase. For the stable map of the system see [ARCHITECTURE.md](ARCHITECTURE.md); for the full history see [PROGRESS.md](PROGRESS.md).
 
-**Last updated:** 2026-06-24
+**Last updated:** 2026-06-26
 **Owner:** Deepesh P · **Company:** Logitech
 **Branch:** `main` (GitHub) · `main` *(GitLab default is `master` — needs settings access to switch)*
 
 ---
 
 ## Current phase
+
+**Phase 1.27.13 — Dual-channel Slack (General + Latency)** ✅ Shipped 2026-06-26
+
+Slack now mirrors the email model from Phase 1.27.2: one **General** webhook for non-latency failures (4xx, 5xx, network, body/status assertions) and a separate **Latency** webhook for failures caused solely by `latency-under` assertions. Empty Latency webhook falls back to General (same semantics email already uses). One new `latency_slack_webhook_url` column added via the existing `ensureColumn` migration pattern; one new `pickSlackWebhook(project, category)` helper in [email.ts](../backend/src/email.ts) next to `pickRecipients` (channel-agnostic — both helpers consume the existing `classifyFailure` output). Three send-points swapped to the helper: URL failure ([monitor.ts:162-170](../backend/src/monitor.ts#L162-L170)), flow failure ([flowRunner.ts:842-848](../backend/src/flowRunner.ts#L842-L848)), and `sendFlowFailureAlert` in [slack.ts](../backend/src/slack.ts) refactored to take an explicit `webhookUrl` arg matching `sendSlackAlert`'s shape. Audit/snapshot Slack untouched — full-project summary has no failure category to route on, stays on the General webhook (matches the email audit behaviour). Frontend Notifications panel rebuilt: the old "Slack URL up top, dropdown for emails below" layout replaced with **pill tabs at the top** (General / Latency, each showing live counts like *"slack on · 3 emails"* or *"slack → general · emails → general"*); picking a pill swaps BOTH the Slack input AND the email textarea below. Save round-trip verifies both the latency-emails and the new latency-slack column came back unchanged so the user gets a clear error instead of a silently-dropped field when a stale backend predates the migration. Bumped `package.json` 1.27.12 → 1.27.13.
 
 **Phase 1.27.12 — API Keys list duplicate-render fix** ✅ Shipped 2026-06-24
 
