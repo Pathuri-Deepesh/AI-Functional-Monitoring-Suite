@@ -10,6 +10,12 @@
 
 ## Current phase
 
+**Phase 1.28.1 — EC2 production deploy (Path B — app is LIVE)** ✅ Shipped 2026-07-08
+
+**Live at:** http://18.215.189.244:4000 · **AWS account:** Logitech CPG Dev (443555584785) · **Region:** us-east-1
+
+Full end-to-end deploy in one session. Launched EC2 t3.small `monitor-suite-prod` in us-east-1b with Ubuntu 26.04 + 20 GB gp3 EBS. `monitor-suite-sg` opens SSH from my IP + TCP 4000 from 0.0.0.0/0 (infra team will lock down). Cloned repo into `/app`, ran `install:all` + `build`. `scp`'d `.env` up with AWS creds. Wrote systemd unit — service auto-restarts on crash and on boot. Hit two live boot issues and fixed both: (a) Node 20 lacks `node:sqlite` → upgraded to Node 22, (b) app defaulted to loopback → set `BACKEND_HOST=0.0.0.0`. Uploaded full local SQLite (298 MB) so prod has all projects + history. Took snapshot `initial-deploy-2026-07-08` as rollback. Wrote [HANDOFF-README.md](HANDOFF-README.md) with the 3 remaining infra-team TODOs (subdomain, HTTPS, tighten SG). Path B means S3 for uploads is still on EBS for now — Phase 1.29 will move them.
+
 **Phase 1.28 — Secrets Manager write-through vault** ✅ Shipped 2026-07-08
 
 First half of the deployment plan committed. New module [backend/src/secrets.ts](../backend/src/secrets.ts) wraps `@aws-sdk/client-secrets-manager` — boot-time fetch hydrates a RAM cache, and `POST /api/projects/:id/keys` + `DELETE /api/projects/:projectId/keys/:keyId` in [backend/src/app.ts](../backend/src/app.ts) now write-through so every add/delete pushes to both SQLite AND the AWS secret. Nested JSON shape `{_meta, <projectId>: {<keyId>: {…}}}` preserves the multi-key-per-project model. SQLite stays the read source; Secrets Manager is a durable off-box mirror for disaster recovery. Env-var gated by `PROJECT_KEYS_SECRET_ARN` — dev laptops without AWS creds continue to work. IAM user `monitor-app-user` provisioned in Logitech CPG Dev account with a scoped inline policy (3 actions on 1 resource). End-to-end verified: user added and removed keys through the UI, watched them appear and disappear in the AWS console. Existing keys backfilled via Plan B (user manually re-added through the UI so SQLite + AWS are in sync). Full click-by-click guide saved at [SECRETS-MANAGER-IMPLEMENTATION.md](SECRETS-MANAGER-IMPLEMENTATION.md) for the next AWS account (e.g. prod).
