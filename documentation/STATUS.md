@@ -2,13 +2,21 @@
 
 > 1-pager snapshot of where the project is **right now**. Updated after every shipped phase. For the stable map of the system see [ARCHITECTURE.md](ARCHITECTURE.md); for the full history see [PROGRESS.md](PROGRESS.md).
 
-**Last updated:** 2026-06-26
+**Last updated:** 2026-07-08
 **Owner:** Deepesh P · **Company:** Logitech
 **Branch:** `main` (GitHub) · `main` *(GitLab default is `master` — needs settings access to switch)*
 
 ---
 
 ## Current phase
+
+**Phase 1.28 — Secrets Manager write-through vault** ✅ Shipped 2026-07-08
+
+First half of the deployment plan committed. New module [backend/src/secrets.ts](../backend/src/secrets.ts) wraps `@aws-sdk/client-secrets-manager` — boot-time fetch hydrates a RAM cache, and `POST /api/projects/:id/keys` + `DELETE /api/projects/:projectId/keys/:keyId` in [backend/src/app.ts](../backend/src/app.ts) now write-through so every add/delete pushes to both SQLite AND the AWS secret. Nested JSON shape `{_meta, <projectId>: {<keyId>: {…}}}` preserves the multi-key-per-project model. SQLite stays the read source; Secrets Manager is a durable off-box mirror for disaster recovery. Env-var gated by `PROJECT_KEYS_SECRET_ARN` — dev laptops without AWS creds continue to work. IAM user `monitor-app-user` provisioned in Logitech CPG Dev account with a scoped inline policy (3 actions on 1 resource). End-to-end verified: user added and removed keys through the UI, watched them appear and disappear in the AWS console. Existing keys backfilled via Plan B (user manually re-added through the UI so SQLite + AWS are in sync). Full click-by-click guide saved at [SECRETS-MANAGER-IMPLEMENTATION.md](SECRETS-MANAGER-IMPLEMENTATION.md) for the next AWS account (e.g. prod).
+
+**Phase 1.27.14 — Deployment plan rewrite (final AWS architecture)** ✅ Shipped 2026-07-06
+
+[DEPLOYMENT-PLAN.md](DEPLOYMENT-PLAN.md) rewritten from scratch to reflect the 7-service architecture the infra team asked for: **EC2 t3.small + EBS 20 GB (SQLite + OS + code) + S3 bucket (uploads + reports) + Secrets Manager (one shared API key) + SES + IAM user + systemd** — ~$18/month. Adds S3 and Secrets Manager (both previously rejected), drops the Phase 1.28 KMS envelope-encryption plan (no longer needed since we're on one shared key instead of per-project user vaults). Doc has 13 sections including a **storage matrix** that pins every kind of data to exactly one home and an explicit "why EBS AND S3 both exist" explainer (SQLite cannot run on S3 — no fsync/locks/random writes; EC2 needs an EBS boot volume anyway). Deploy sequenced into 7 sub-phases (~4 hours end to end). Two additive code changes documented but non-blocking for Phase 1 deploy: `backend/src/storage.ts` (~1 day) wrapping `@aws-sdk/client-s3`, `backend/src/secrets.ts` (~2 hours) wrapping `@aws-sdk/client-secrets-manager`. Operational runbook covers restart, rotate, roll back, and S3-version-restore; risks + mitigations table documents blast-radius reasoning for each service. Self-sufficient handoff doc — no external context needed.
 
 **Phase 1.27.13 — Dual-channel Slack (General + Latency)** ✅ Shipped 2026-06-26
 

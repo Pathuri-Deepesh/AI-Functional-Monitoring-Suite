@@ -62,6 +62,11 @@ import {
   updateUrl,
 } from "./store.js";
 import { uploadPath } from "./paths.js";
+import {
+  loadProjectApiKeys,
+  upsertProjectApiKey,
+  deleteProjectApiKeyFromSecrets,
+} from "./secrets.js";
 import { checkAllInProject, checkOne, snapshot, startMonitorLoop } from "./monitor.js";
 import { runAuditAndDeliver } from "./audit.js";
 import { getLiveStepProgress as getLiveFlowStep, kickoffFlow, runFlow } from "./flowRunner.js";
@@ -322,7 +327,7 @@ app.post("/api/projects/:id/import/openapi/apply", async (req, res) => {
 });
 
 // ---------- API Keys ----------
-app.post("/api/projects/:id/keys", (req, res) => {
+app.post("/api/projects/:id/keys", async (req, res) => {
   const { name, value, headerName, headerPrefix } = req.body ?? {};
   if (typeof name !== "string" || typeof value !== "string" || !value) {
     res.status(400).json({ error: "name and value are required" });
@@ -333,14 +338,36 @@ app.post("/api/projects/:id/keys", (req, res) => {
     res.status(404).json({ error: "Project not found" });
     return;
   }
+  if (process.env.PROJECT_KEYS_SECRET_ARN) {
+    try {
+      await upsertProjectApiKey(req.params.id, key);
+    } catch (err) {
+      console.error("[api-keys] Secrets Manager write failed, rolling back:", err);
+      removeApiKey(req.params.id, key.id);
+      res
+        .status(503)
+        .json({ error: "Could not save to secrets vault. Please try again." });
+      return;
+    }
+  }
   res.status(201).json(key);
 });
 
-app.delete("/api/projects/:projectId/keys/:keyId", (req, res) => {
+app.delete("/api/projects/:projectId/keys/:keyId", async (req, res) => {
   const ok = removeApiKey(req.params.projectId, req.params.keyId);
   if (!ok) {
     res.status(404).json({ error: "Key not found" });
     return;
+  }
+  if (process.env.PROJECT_KEYS_SECRET_ARN) {
+    try {
+      await deleteProjectApiKeyFromSecrets(req.params.projectId, req.params.keyId);
+    } catch (err) {
+      console.error(
+        "[api-keys] Secrets Manager delete failed — SQLite already updated; manual reconciliation may be needed:",
+        err
+      );
+    }
   }
   res.status(204).end();
 });
@@ -1049,6 +1076,22 @@ try {
   // 5173 handles the UI; this Express process is API-only.
   console.log(
     `[monitoring-backend] no frontend build at ${PUBLIC_DIR} — run "npm run build" at the repo root to bundle the UI into this server`
+  );
+}
+
+if (process.env.PROJECT_KEYS_SECRET_ARN) {
+  try {
+    await loadProjectApiKeys();
+  } catch (err) {
+    console.error(
+      "[monitoring-backend] Secrets Manager unreachable at boot — refusing to start.",
+      err
+    );
+    process.exit(1);
+  }
+} else {
+  console.log(
+    "[monitoring-backend] PROJECT_KEYS_SECRET_ARN not set — Secrets Manager sync disabled (local SQLite vault only)"
   );
 }
 
