@@ -3,7 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import yaml from "js-yaml";
-import { mkdirSync, createReadStream, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildOpenAPISpec } from "./openapiExport.js";
@@ -61,7 +61,7 @@ import {
   updateProject,
   updateUrl,
 } from "./store.js";
-import { uploadPath } from "./paths.js";
+import { saveUpload, readUpload, uploadExists, deleteUploadFile } from "./storage.js";
 import {
   loadProjectApiKeys,
   upsertProjectApiKey,
@@ -952,7 +952,7 @@ app.post(
   "/api/projects/:projectId/uploads",
   mutationLimiter,
   express.raw({ type: "*/*", limit: MAX_UPLOAD_BYTES }),
-  (req, res) => {
+  async (req, res) => {
     if (!getProject(req.params.projectId)) {
       res.status(404).json({ error: "Project not found" });
       return;
@@ -989,7 +989,7 @@ app.post(
         mimeType,
         sizeBytes: buf.length,
       });
-      writeFileSync(uploadPath(upload.id), buf);
+      await saveUpload(upload.id, buf);
       res.status(201).json(upload);
     } catch (e) {
       sendError(res, 400, e, "Upload failed");
@@ -997,26 +997,23 @@ app.post(
   }
 );
 
-app.get("/api/uploads/:id", (req, res) => {
+app.get("/api/uploads/:id", async (req, res) => {
   const upload = getUpload(req.params.id);
   if (!upload) {
     res.status(404).json({ error: "Upload not found" });
     return;
   }
-  const path = uploadPath(upload.id);
-  try {
-    statSync(path);
-  } catch {
+  if (!(await uploadExists(upload.id))) {
     res.status(404).json({ error: "Upload file missing on disk" });
     return;
   }
   res.setHeader("content-type", upload.mimeType);
   res.setHeader("content-length", String(upload.sizeBytes));
   res.setHeader("content-disposition", `inline; filename="${upload.filename.replace(/"/g, "")}"`);
-  createReadStream(path).pipe(res);
+  res.send(await readUpload(upload.id));
 });
 
-app.delete("/api/uploads/:id", (req, res) => {
+app.delete("/api/uploads/:id", async (req, res) => {
   const upload = getUpload(req.params.id);
   if (!upload) {
     res.status(404).json({ error: "Upload not found" });
@@ -1024,7 +1021,7 @@ app.delete("/api/uploads/:id", (req, res) => {
   }
   deleteUpload(upload.id);
   try {
-    unlinkSync(uploadPath(upload.id));
+    await deleteUploadFile(upload.id);
   } catch {
     // file already gone — ignore
   }
