@@ -473,7 +473,8 @@ app.post("/api/projects/:id/audit", async (req, res) => {
     return;
   }
   try {
-    const result = await runAuditAndDeliver(project.id, REPORTS_DIR, undefined);
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const result = await runAuditAndDeliver(project.id, REPORTS_DIR, baseUrl);
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
