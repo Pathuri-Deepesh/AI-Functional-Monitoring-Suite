@@ -1,0 +1,41 @@
+# .ebignore controls what `eb deploy` bundles. Its mere PRESENCE makes EB stop
+# using git to decide the bundle and instead ship everything NOT listed here.
+# That's exactly what we need: backend/public/ (the built UI) is gitignored, so
+# a git-based bundle would ship no frontend. With this file, backend/public/ and
+# the dotfile .platform/ ARE included because they aren't excluded below.
+
+# --- Dependencies: EB installs these server-side; never ship them ---
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# --- Frontend source & build: already copied into backend/public/ by the
+#     local `npm run build`, so the server doesn't need the frontend tree ---
+frontend/
+
+# --- Local data & secrets: must never ship (would clobber the persistent
+#     volume / leak secrets) ---
+backend/data/
+.env
+.env.*
+*.log
+
+# --- CDK app + the dead AL2-era ebextensions hook: not part of the runtime ---
+infrastructure/
+
+# --- Repo bookkeeping / internal / docs ---
+.git/
+.gitignore
+.claude/
+.claude_internal/
+documentation/
+project-tracker.xlsx
+~$project-tracker.xlsx
+.mcp.json
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

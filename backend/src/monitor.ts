@@ -270,8 +270,8 @@ export function startMonitorLoop(): void {
   setInterval(() => void tick(), TICK_MS);
   pruneOldChecks();
   setInterval(() => pruneOldChecks(), PRUNE_MS);
-  // Phase 1.27.9 — also sweep the audit-report HTML directory.
+  // Phase 1.27.9 — also sweep old audit reports (S3-aware as of Phase 1.31).
   const reportsDir = resolvePath("./data/reports");
-  pruneOldReports(reportsDir);
-  setInterval(() => pruneOldReports(reportsDir), PRUNE_MS);
+  void pruneOldReports(reportsDir);
+  setInterval(() => void pruneOldReports(reportsDir), PRUNE_MS);
 }

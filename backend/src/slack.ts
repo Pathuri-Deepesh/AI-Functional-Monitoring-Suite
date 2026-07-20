@@ -80,7 +80,6 @@ export interface SlackAuditArgs {
   failingFlows: number;
   okFlows: number;
   reportUrl: string;
-  reportPath: string;
   reportFilename: string;
 }
 

@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isS3Enabled, pruneReportsS3 } from "./storage.js";
 
 const DB_FILE = "./data/db.sqlite";
 const LEGACY_JSON = "./data/db.json";
@@ -482,25 +483,45 @@ export function pruneOldChecks(): void {
 }
 
 /**
- * Phase 1.27.9 — sweep stale audit-report HTML files. They sit under
- * data/reports/ and are never written to the DB, so the pre-existing
- * retention sweeper missed them entirely. Without this they accumulate
- * forever (~500KB each × daily audits = MBs/month → disk-exhaustion DoS on
- * long-running instances).
+ * Phase 1.27.9 — sweep stale audit-report HTML files. Originally they sat flat
+ * under data/reports/; as of Phase 1.31 reports live in S3 (or, on dev, under
+ * data/reports/<projectId>/) so this sweeper handles both backends.
+ * Without pruning they accumulate forever (~500KB each × daily audits).
  */
 const REPORT_RETENTION_DAYS = 30;
+const REPORT_RETENTION_MS = REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 
-export function pruneOldReports(reportsDir: string): void {
-  const cutoffMs = Date.now() - REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+export async function pruneOldReports(reportsDir: string): Promise<void> {
+  // S3 backend: delegate to the storage layer's S3-aware pruner.
+  if (isS3Enabled()) {
+    try {
+      const n = await pruneReportsS3(REPORT_RETENTION_MS);
+      if (n > 0) {
+        console.log(`[db] pruned ${n} old audit report(s) from S3 (>${REPORT_RETENTION_DAYS}d)`);
+      }
+    } catch (e) {
+      console.error("[db] S3 report prune failed:", e);
+    }
+    return;
+  }
+
+  // Local disk: reports are nested one level deep (reports/<projectId>/<file>).
+  const cutoffMs = Date.now() - REPORT_RETENTION_MS;
   let pruned = 0;
-  try {
-    const entries = readdirSync(reportsDir);
+  const sweep = (dir: string) => {
+    let entries: string[] = [];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return; // dir doesn't exist yet — fine
+    }
     for (const name of entries) {
-      if (!name.endsWith(".html")) continue;
-      const fpath = join(reportsDir, name);
+      const fpath = join(dir, name);
       try {
         const st = statSync(fpath);
-        if (st.isFile() && st.mtime.getTime() < cutoffMs) {
+        if (st.isDirectory()) {
+          sweep(fpath);
+        } else if (st.isFile() && name.endsWith(".html") && st.mtime.getTime() < cutoffMs) {
           unlinkSync(fpath);
           pruned++;
         }
@@ -508,9 +529,8 @@ export function pruneOldReports(reportsDir: string): void {
         // file disappeared between readdir and stat — fine
       }
     }
-  } catch {
-    // reports dir doesn't exist yet — fine
-  }
+  };
+  sweep(reportsDir);
   if (pruned > 0) {
     console.log(`[db] pruned ${pruned} old audit report(s) (older than ${REPORT_RETENTION_DAYS} days)`);
   }

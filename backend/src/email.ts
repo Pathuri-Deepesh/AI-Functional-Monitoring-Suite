@@ -108,7 +108,12 @@ async function sendMail(args: {
   subject: string;
   text: string;
   html?: string;
-  attachments?: Array<{ filename: string; path: string; contentType?: string }>;
+  attachments?: Array<{
+    filename: string;
+    path?: string;
+    content?: Buffer;
+    contentType?: string;
+  }>;
 }): Promise<SendResult> {
   const client = getSesClient();
   if (!client) {
@@ -175,7 +180,12 @@ async function buildRawMime(args: {
   subject: string;
   text: string;
   html?: string;
-  attachments?: Array<{ filename: string; path: string; contentType?: string }>;
+  attachments?: Array<{
+    filename: string;
+    path?: string;
+    content?: Buffer;
+    contentType?: string;
+  }>;
 }): Promise<Uint8Array> {
   const CRLF = "\r\n";
   const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
@@ -217,7 +227,9 @@ async function buildRawMime(args: {
 
   // ---- Attachments ----
   for (const att of args.attachments ?? []) {
-    const data = await readFile(att.path);
+    // Prefer in-memory bytes (reports now come from S3, not a local path); fall
+    // back to reading a local file path for any other attachment source.
+    const data = att.content ?? (att.path ? await readFile(att.path) : Buffer.alloc(0));
     const ctype = att.contentType ?? "application/octet-stream";
     const safeName = att.filename.replace(/"/g, "");
     lines.push(`--${mixedBoundary}`);
@@ -332,7 +344,7 @@ export interface EmailAuditArgs {
   failingFlows: number;
   okFlows: number;
   reportUrl: string;
-  reportPath: string;
+  reportBytes: Buffer;
   reportFilename: string;
 }
 
@@ -346,7 +358,7 @@ export async function sendAuditEmail(args: EmailAuditArgs): Promise<SendResult> 
     failingFlows,
     okFlows,
     reportUrl,
-    reportPath,
+    reportBytes,
     reportFilename,
   } = args;
   const to = parseRecipients(project.notificationEmails);
@@ -490,7 +502,7 @@ export async function sendAuditEmail(args: EmailAuditArgs): Promise<SendResult> 
     attachments: [
       {
         filename: reportFilename,
-        path: reportPath,
+        content: reportBytes,
         contentType: "text/html",
       },
     ],

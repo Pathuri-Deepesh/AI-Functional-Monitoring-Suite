@@ -1,6 +1,5 @@
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { saveReport } from "./storage.js";
 import {
   getProject,
   getUrlSparkline,
@@ -17,7 +16,6 @@ import type { Flow, FlowRun, UrlStats } from "./types.js";
 export interface AuditResult {
   projectId: string;
   reportFilename: string;
-  reportPath: string;
   reportUrl: string;
   // URL counts
   totalUrls: number;
@@ -44,7 +42,6 @@ export interface AuditResult {
  */
 export async function runAuditAndDeliver(
   projectId: string,
-  reportsDir: string,
   baseUrl = "http://localhost:4000"
 ): Promise<AuditResult> {
   const project = getProject(projectId);
@@ -66,12 +63,14 @@ export async function runAuditAndDeliver(
     flowSummaries.push({ flow: f, latestRun: runs[0] ?? null });
   }
 
-  // Render HTML
+  // Render HTML and store it (S3 when configured, local disk otherwise) under
+  // reports/<projectId>/<filename> so report history is browsable per project.
   const html = renderReportHtml({ project, urls, stats, sparklines, flowSummaries });
   const filename = `${slugify(project.name)}-${stamp()}-${randomUUID().slice(0, 8)}.html`;
-  const reportPath = join(reportsDir, filename);
-  writeFileSync(reportPath, html, "utf8");
-  const reportUrl = `${baseUrl}/reports/${filename}`;
+  const reportBytes = Buffer.from(html, "utf8");
+  await saveReport(project.id, filename, reportBytes);
+  // Serve route is GET /reports/:projectId/:filename (see app.ts).
+  const reportUrl = `${baseUrl}/reports/${project.id}/${filename}`;
 
   // Aggregate counts
   const failingUrls = urls.filter(
@@ -94,7 +93,7 @@ export async function runAuditAndDeliver(
     failingFlows,
     okFlows,
     reportUrl,
-    reportPath,
+    reportBytes,
     reportFilename: filename,
   };
   const [slackSettled, emailSettled] = await Promise.allSettled([
@@ -113,7 +112,6 @@ export async function runAuditAndDeliver(
   return {
     projectId,
     reportFilename: filename,
-    reportPath,
     reportUrl,
     totalUrls: urls.length,
     failingUrls,

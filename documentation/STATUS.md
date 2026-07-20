@@ -2,13 +2,35 @@
 
 > 1-pager snapshot of where the project is **right now**. Updated after every shipped phase. For the stable map of the system see [ARCHITECTURE.md](ARCHITECTURE.md); for the full history see [PROGRESS.md](PROGRESS.md).
 
-**Last updated:** 2026-07-08
+**Last updated:** 2026-07-16
 **Owner:** Deepesh P · **Company:** Logitech
 **Branch:** `main` (GitHub) · `main` *(GitLab default is `master` — needs settings access to switch)*
 
 ---
 
 ## Current phase
+
+**Phase 1.31 — Audit reports in S3 (browsable history)** ✅ Shipped 2026-07-16
+
+Audit reports now persist as S3 objects under `reports/<projectId>/<filename>` (was local disk), so report history is browsable per project in the bucket and survives instance replacement. Mirrors the existing uploads-in-S3 pattern in [backend/src/storage.ts](../backend/src/storage.ts) (new `saveReport`/`readReport`/`listReports`/`pruneReportsS3`) — reuses the same bucket + IAM role as uploads, so **no infra/IAM change was needed**. [audit.ts](../backend/src/audit.ts) writes via `saveReport` and points `reportUrl` at a new serve route `GET /reports/:projectId/:filename` in [app.ts](../backend/src/app.ts) (replacing `express.static`); a `GET /api/projects/:projectId/reports` listing endpoint was added. Email attachments switched from reading a local path to in-memory bytes ([email.ts](../backend/src/email.ts)); the report pruner ([db.ts](../backend/src/db.ts)) is now S3-aware. Deployed via `eb deploy` and verified end-to-end on the live env: audit → object in `s3://monitor-suite-storage-dev/reports/<pid>/`, serve route returns the HTML, and the report stays openable **after a full redeploy** (proving S3 durability, not ephemeral disk). Bumped `package.json` 1.30.0 → 1.31.0. **Deferred:** automated EBS snapshots (DLM) — coded but the shared CDK exec role lacks `dlm:CreateLifecyclePolicy` and we chose not to modify that shared role; backed out cleanly (see tracker 31.5).
+
+**Phase 1.30 — CDK infrastructure-as-code + Elastic Beanstalk (dev DEPLOYED & LIVE)** ✅ Shipped 2026-07-15
+
+**Live (office-IP only):** http://184.72.231.124 · env `monitor-suite-env-dev` · **AWS account:** Logitech CPG Dev (443555584785) · **Region:** us-east-1 · **Health:** Green
+
+Manager asked to move the manual EC2 deploy to AWS CDK (infrastructure-as-code) + Elastic Beanstalk across three environments. New [infrastructure/](../infrastructure) directory (separate CDK TypeScript project) defines one parameterized stack — [lib/monitor-suite-stack.ts](../infrastructure/lib/monitor-suite-stack.ts) — instantiated for `dev`/`staging`/`prod` from [bin/app.ts](../infrastructure/bin/app.ts) via [lib/config.ts](../infrastructure/lib/config.ts). Per-environment resources: S3 bucket, Secrets Manager secret, IAM **Role** (upgrade from the live setup's long-lived IAM user — no static keys on the instance), an office-IP-locked security group, a persistent EBS volume, and an Elastic Beanstalk single-instance environment. **`dev` is now fully deployed and healthy.** App code deployed via the **EB CLI** (`eb init`/`eb use`/`eb deploy` against the CDK-created app — never `eb create`).
+
+Key things proven end-to-end on the live environment:
+- **Runs the real app** (React UI + Express API), not the EB placeholder.
+- **Private / company-only:** EB's default public security group disabled (`DisableDefaultEC2SecurityGroup=true`); the instance uses only `monitor-suite-sg-dev`, with ports 22/80/4000 restricted to the office CIDR `14.97.45.226/32` — no `0.0.0.0/0` anywhere.
+- **Data persists:** the app writes SQLite to cwd-relative `./data`; AL2023 `.platform/hooks/` (prebuild installs backend deps incl. `tsx`; predeploy attaches+mounts the EBS volume at `/app/data` via IMDSv2 + NVMe device discovery; postdeploy symlinks `backend/data → /app/data` and restarts). **Verified the DB survives both a redeploy and a full instance replacement.**
+- **Single-AZ pinning:** the env is pinned to one subnet in the volume's AZ (`us-east-1a`) — an EBS volume can only attach to an instance in its own AZ, so this prevents `InvalidVolume.ZoneMismatch` on instance replacement.
+
+Additive only — does **not** touch the currently-live manual EC2/S3/IAM from Phase 1.28.1/1.29; this is a parallel `-dev` stack. `staging`/`prod` remain ready-but-undeployed identical-config code. Deploy-time issues found and fixed in code (non-ASCII descriptions, stale EB platform version, missing VPC/subnet options, us-east-1e/t3.small AZ gap, IAM `DescribeVolumes` needing `Resource:*`, data-dir symlink path, AZ pinning) are tracked in `project-tracker.csv` rows 30.6–30.12. **Deferred:** `SES_FROM_EMAIL` (no verified SES sender yet — email alerts inactive until set). **Teardown/cost control:** `cdk destroy MonitorSuite-dev`. See [infrastructure/README.md](../infrastructure/README.md).
+
+**Phase 1.29 — S3 storage for uploaded files** ✅ Shipped 2026-07-09
+
+New [backend/src/storage.ts](../backend/src/storage.ts) wraps `@aws-sdk/client-s3` with `saveUpload` / `readUpload` / `uploadExists` / `deleteUploadFile` — S3-backed when `S3_BUCKET_NAME` is set, local-disk fallback otherwise (dev laptops unaffected). Scoped to uploads only — reports stay on local disk since email delivery attaches them by local path and they're cheap to regenerate every audit run. 3 upload routes in `app.ts` swapped over. User created the S3 bucket (`monitor-suite-storage-deepesh-2026`, all-public-access blocked, versioning on, SSE-S3) and extended `monitor-app-user`'s IAM policy with a scoped `S3StorageAccess` statement. Deployed to EC2 (pull, build, `S3_BUCKET_NAME` added to `.env`, restart) and verified end-to-end — user uploaded a real image through the prod UI and confirmed it both in the S3 console and via the app's own Uploads list. Bonus fix in the same session: `runAuditAndDeliver` was hardcoding `http://localhost:4000` as the report base URL regardless of actual host, breaking every Snapshot & Report link on EC2 — fixed by deriving the base URL from the incoming request. Bumped `package.json` 1.28.1 → 1.29.0.
 
 **Phase 1.28.1 — EC2 production deploy (Path B — app is LIVE)** ✅ Shipped 2026-07-08
 
@@ -92,10 +114,12 @@ Two related bugs in [backend/src/monitor.ts](../backend/src/monitor.ts) closed i
 
 ## Next up (in order)
 
-1. Manual smoke of Phase 1.27 (4 sub-phases): Settings menu navigation, Light/Dark/System theme flip, dual-channel email routing (latency vs general — needs AWS SES creds + verified sender; pending Phase 1.27.8 hand-off), URL Edit with retry/wait, API-key `{{slug}}` substitution in a custom header.
-2. Demo the Swagger import flow end-to-end with a manager-supplied spec URL (Petstore and Stripe specs already smoke-tested locally).
-3. Fresh GitLab PAT with `write_repository` scope → push `main` to the GitLab mirror.
-4. Schedule Phase 2 AI kick-off meeting with manager.
+1. Take a fresh EBS snapshot now that Phase 1.29 is live (last one was `initial-deploy-2026-07-08`, pre-S3).
+2. Request AWS SES production access (currently sandboxed to 200 emails/day, verified recipients only).
+3. Add the manager's IP allowlist to `monitor-suite-sg` once he sends it.
+4. Hand off `HANDOFF-README.md` + EC2 access to the infra team.
+5. Fresh GitLab PAT with `write_repository` scope → push `main` to the GitLab mirror.
+6. Schedule Phase 2 AI kick-off meeting with manager.
 
 ## Where things live
 

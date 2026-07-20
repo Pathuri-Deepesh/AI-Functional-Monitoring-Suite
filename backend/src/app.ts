@@ -3,7 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import yaml from "js-yaml";
-import { mkdirSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildOpenAPISpec } from "./openapiExport.js";
@@ -61,7 +61,14 @@ import {
   updateProject,
   updateUrl,
 } from "./store.js";
-import { saveUpload, readUpload, uploadExists, deleteUploadFile } from "./storage.js";
+import {
+  saveUpload,
+  readUpload,
+  uploadExists,
+  deleteUploadFile,
+  readReport,
+  listReports,
+} from "./storage.js";
 import {
   loadProjectApiKeys,
   upsertProjectApiKey,
@@ -82,9 +89,6 @@ const PORT = Number(process.env.PORT) || 4000;
 // is required to expose on the LAN. Was the #1 deployment foot-gun: the log
 // line said "localhost" but Node was binding 0.0.0.0 silently.
 const HOST = process.env.BACKEND_HOST ?? "127.0.0.1";
-
-const REPORTS_DIR = resolve("./data/reports");
-mkdirSync(REPORTS_DIR, { recursive: true });
 
 // Phase 1.27.9 — security headers. helmet() sets ~15 sensible defaults
 // (X-Content-Type-Options, X-Frame-Options DENY, Referrer-Policy, etc.).
@@ -140,7 +144,33 @@ const mutationLimiter = rateLimit({
 });
 
 app.use(express.json({ limit: "1mb" }));
-app.use("/reports", express.static(REPORTS_DIR));
+// Reports are stored in S3 (key reports/<projectId>/<filename>), with local-disk
+// fallback when S3 is disabled. Serve them through the app so the "Open report"
+// link keeps working regardless of backend. Filename is validated to a single
+// path segment to prevent traversal.
+app.get("/reports/:projectId/:filename", async (req, res) => {
+  const { projectId, filename } = req.params;
+  if (!/^[A-Za-z0-9._-]+\.html$/.test(filename)) {
+    res.status(400).send("Invalid report name");
+    return;
+  }
+  try {
+    const bytes = await readReport(projectId, filename);
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(bytes);
+  } catch {
+    res.status(404).send("Report not found");
+  }
+});
+
+// Optional: list a project's report history (newest first).
+app.get("/api/projects/:projectId/reports", async (req, res) => {
+  try {
+    res.json(await listReports(req.params.projectId));
+  } catch (e) {
+    sendError(res, 500, e, "Failed to list reports");
+  }
+});
 
 // Phase 1.27.9 — sanitize error responses. Generic message to the client,
 // full detail to the server log with a request-id the user can quote back.
@@ -474,7 +504,7 @@ app.post("/api/projects/:id/audit", async (req, res) => {
   }
   try {
     const baseUrl = `${req.protocol}://${req.get("host")}`;
-    const result = await runAuditAndDeliver(project.id, REPORTS_DIR, baseUrl);
+    const result = await runAuditAndDeliver(project.id, baseUrl);
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : String(e) });
