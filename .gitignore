@@ -86,3 +86,7 @@ documentation/PROGRESS.md
 infrastructure/cdk.out/
 infrastructure/cdk.context.json
 infrastructure/node_modules/
+
+# Ignore the entire infrastructure/ IaC folder from future tracking.
+# (Already-committed files remain in history; this stops new changes being tracked.)
+infrastructure/
