@@ -6,6 +6,110 @@ A self-hosted API monitoring suite that watches HTTP endpoints, chains multi-ste
 
 ---
 
+## 🚀 Local Setup Guide
+
+Get the app running on your own machine from a fresh clone. Two ways to run it:
+**Dev mode** (two servers, hot-reload — best while developing) or
+**Bundled mode** (one server — mirrors production).
+
+### 1. Prerequisites
+
+| Requirement | Version | Check with | Notes |
+|---|---|---|---|
+| **Node.js** | **≥ 22** | `node -v` | Required — the backend uses the built-in `node:sqlite` module (only in Node 22+). No native build tools needed. |
+| **npm** | ≥ 10 (ships with Node 22) | `npm -v` | |
+| **Git** | any recent | `git --version` | To clone the repo. |
+
+> ⚠️ **Node 22 is mandatory.** On older Node the backend will crash with `Cannot find module 'node:sqlite'`. Install from [nodejs.org](https://nodejs.org) (LTS 22+) or via `nvm install 22`.
+
+No database server, Docker, or AWS account is needed to run locally — SQLite is a single file and email/Slack are optional.
+
+### 2. Clone the repository
+
+```bash
+git clone <repo-url>
+cd AI-Functional-Monitoring-Suite
+```
+
+### 3. Install dependencies
+
+From the **repo root** — this installs both backend and frontend in one command:
+
+```bash
+npm run install:all
+```
+
+<sub>(Equivalent to `npm --prefix backend install && npm --prefix frontend install`.)</sub>
+
+### 4. Run it — Option A: Dev mode (recommended while developing)
+
+Two servers with hot-reload. Open **two terminals** from the repo root:
+
+**Terminal 1 — backend** (API on port **4000**):
+```bash
+npm run dev:backend
+```
+
+**Terminal 2 — frontend** (dashboard on port **5173**):
+```bash
+npm run dev:frontend
+```
+
+Then open **<http://localhost:5173>** in your browser.
+
+### 4. Run it — Option B: Bundled mode (mirrors production)
+
+Frontend is compiled to static files and served by the backend — **one process, one port**:
+
+```bash
+npm run build      # builds frontend → copies into backend/public
+npm start          # serves everything on port 4000
+```
+
+Then open **<http://localhost:4000>**.
+
+### 5. Verify it's working
+
+- **Backend health check:** open <http://localhost:4000/api/health> → should return
+  `{ "ok": true, "service": "monitoring-backend" }`
+- **Frontend:** the dashboard loads. Create a project from the sidebar, add a URL like
+  `https://httpstat.us/200` and one like `https://httpstat.us/500`, and status grouping
+  appears within ~30 seconds.
+
+### 6. (Optional) Enable Email / Slack alerts
+
+The app runs fully without these. To turn them on, see
+[Optional — enable email notifications](#optional--enable-email-notifications) and
+[Optional — enable Slack notifications](#optional--enable-slack-notifications) below.
+
+### Where your data lives
+
+Everything is stored in a single SQLite file at **`backend/data/db.sqlite`** (auto-created on
+first run, gitignored). Deleting it resets the app to empty.
+⚠️ It holds API keys and webhook URLs in plaintext — **never commit or share it.**
+
+### Common issues
+
+| Problem | Fix |
+|---|---|
+| `Cannot find module 'node:sqlite'` | You're on Node < 22. Upgrade to Node 22+. |
+| `EADDRINUSE :4000` (or `:5173`) | An old process is holding the port. Find & kill it: **Windows** `netstat -ano \| findstr :4000` then `taskkill /F /PID <pid>` · **Mac/Linux** `lsof -ti:4000 \| xargs kill`. |
+| Dashboard loads but data doesn't update | Make sure the **backend** terminal is running — the frontend polls it on port 4000. |
+| Blank page in bundled mode | Run `npm run build` before `npm start` (the backend serves `backend/public/`, which the build creates). |
+
+### Quick command reference (from repo root)
+
+| Command | What it does |
+|---|---|
+| `npm run install:all` | Install backend + frontend deps |
+| `npm run dev:backend` | Backend dev server (port 4000, hot-reload) |
+| `npm run dev:frontend` | Frontend dev server (port 5173, hot-reload) |
+| `npm run build` | Production build (frontend → `backend/public`) |
+| `npm start` | Run the bundled single-server app (port 4000) |
+| `npm run clean` | Remove build outputs (`backend/public`, `frontend/dist`) |
+
+---
+
 ## ⚠ Security & threat model
 
 This app is designed for **single-user, localhost (or trusted-LAN) deployment**. By default it has no authentication or per-project ownership — anyone who can reach the backend port can read / modify / delete everything.
@@ -45,27 +149,17 @@ A polished React dashboard sits in front of it all — drag-and-drop step reorde
 
 ## Run it locally
 
-You need **Node ≥ 22** (the backend uses the built-in `node:sqlite` module — no native compilation, no `better-sqlite3`).
+See the **[🚀 Local Setup Guide](#-local-setup-guide)** above for full step-by-step instructions (prerequisites, install, dev vs bundled mode, troubleshooting).
 
-Open **two terminals.**
-
-**Terminal 1 — backend** (port 4000):
+**TL;DR** — from the repo root:
 
 ```bash
-cd backend
-npm install            # first time only
-npm run dev            # tsx watch with auto-reload
+npm run install:all                        # first time only
+npm run dev:backend                        # terminal 1 → API on :4000
+npm run dev:frontend                       # terminal 2 → dashboard on :5173
 ```
 
-**Terminal 2 — frontend** (port 5173):
-
-```bash
-cd frontend
-npm install            # first time only
-npm run dev            # vite dev server
-```
-
-Open <http://localhost:5173>. Create a project from the sidebar, then add a URL like `https://httpstat.us/200` and one like `https://httpstat.us/500` to see status grouping kick in within ~30 seconds.
+Open <http://localhost:5173>.
 
 ---
 
