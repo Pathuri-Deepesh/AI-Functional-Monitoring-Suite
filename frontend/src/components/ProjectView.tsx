@@ -449,10 +449,10 @@ export function ProjectView(props: Props) {
           >
             📥 Import from Swagger
           </button>
-          <button className="ghost" onClick={props.onSettings} title="Project settings">
+          <button className="ghost icon-btn" onClick={props.onSettings} title="Project settings">
             ⚙
           </button>
-          <button className="ghost destructive" onClick={props.onDeleteProject} title="Delete project">
+          <button className="ghost destructive icon-btn" onClick={props.onDeleteProject} title="Delete project">
             🗑
           </button>
         </div>

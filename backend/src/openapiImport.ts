@@ -296,6 +296,38 @@ export async function fetchAndParseSpec(specUrl: string): Promise<ParsedSpec> {
     clearTimeout(timer);
   }
 
+  // The fetched text is the base URL for relative server resolution.
+  return parseSpecFromText(rawText, trimmed);
+}
+
+/**
+ * Parse a spec supplied as raw text (e.g. a file the user browsed to on their
+ * machine and the browser read + uploaded as `specContent`) instead of a URL.
+ * Shares all the OpenAPI validation + bundling with the URL path — the only
+ * difference is there's no fetch and no base URL to resolve relative servers
+ * against, so callers should rely on the spec's own `servers` block or the
+ * Base URL override for a file that uses relative paths.
+ */
+export async function parseSpecContent(content: string): Promise<ParsedSpec> {
+  const raw = typeof content === "string" ? content : "";
+  if (!raw.trim()) throw new Error("Spec file is empty");
+  // Same 10MB ceiling as the fetch path, measured on the decoded text.
+  if (Buffer.byteLength(raw, "utf-8") > MAX_SPEC_BYTES) {
+    throw new Error("Spec exceeds 10MB limit");
+  }
+  return parseSpecFromText(raw, undefined);
+}
+
+/**
+ * Shared parse pipeline for both the URL and file-content paths: YAML/JSON
+ * decode → OpenAPI 3.x validation → `$ref` bundling → ParsedSpec. `baseSpecUrl`
+ * is the origin used to resolve relative `servers` entries (the fetched URL for
+ * the URL path; undefined for a browsed file — no origin to resolve against).
+ */
+async function parseSpecFromText(
+  rawText: string,
+  baseSpecUrl: string | undefined,
+): Promise<ParsedSpec> {
   // Parse YAML or JSON (yaml.load handles JSON too — it's a superset).
   let doc: any;
   try {
@@ -304,7 +336,7 @@ export async function fetchAndParseSpec(specUrl: string): Promise<ParsedSpec> {
     throw new Error(`Spec is not valid YAML/JSON: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (!doc || typeof doc !== "object") {
-    throw new Error("URL did not return a valid OpenAPI 3.x document");
+    throw new Error("Not a valid OpenAPI 3.x document");
   }
 
   // Swagger 2.0 detection — bail with a clear message.
@@ -314,7 +346,7 @@ export async function fetchAndParseSpec(specUrl: string): Promise<ParsedSpec> {
     );
   }
   if (!doc.openapi || !String(doc.openapi).startsWith("3.")) {
-    throw new Error("URL did not return a valid OpenAPI 3.x document");
+    throw new Error("Not a valid OpenAPI 3.x document");
   }
 
   // Bundle (resolves internal $refs without inlining — avoids OOM on circular schemas).
@@ -340,7 +372,7 @@ export async function fetchAndParseSpec(specUrl: string): Promise<ParsedSpec> {
     specId,
     specTitle: title,
     specVersion: version,
-    specUrl: trimmed,
+    specUrl: baseSpecUrl ?? "",
     isRoundTrip: typeof bundled["x-mon-project-id"] === "string",
   };
 }

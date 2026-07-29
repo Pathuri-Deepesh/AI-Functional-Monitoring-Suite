@@ -359,8 +359,15 @@ a {
    ============================================================ */
 .main {
   padding: var(--s-6) var(--s-7) var(--s-8);
-  max-width: 1200px;
+  /* Responsive width: fill the available column up to a comfortable ceiling.
+     Previously hard-capped at 1200px, which looked right on a laptop but left
+     large empty margins (content looked "small") on a big external monitor.
+     Now it scales up to 1600px so wide screens are used well, while staying
+     centered and readable rather than stretching edge-to-edge on ultrawides.
+     Very large screens (>=1800px) get a bit more via the media query below. */
+  max-width: 1600px;
   width: 100%;
+  margin: 0 auto;                 /* center the content within the wide column */
   /* Phase 1.27.11 — without min-width:0 a wide child (action-button row,
      stat-grid) can force the grid column wider than the viewport, blowing
      the layout out to the right. min-width:0 lets the column shrink to fit
@@ -369,6 +376,14 @@ a {
   display: flex;
   flex-direction: column;
   gap: var(--s-3);                /* was --s-6 (24px) — now 12px for tighter rhythm */
+}
+
+/* Very large / external monitors — let the content breathe a bit more so it
+   doesn't look cramped or lost in empty space on a 1080p+/1440p display. */
+@media (min-width: 1800px) {
+  .main {
+    max-width: 1800px;
+  }
 }
 
 .project-hero {
@@ -757,6 +772,21 @@ button.ghost {
 button.ghost:hover:not(:disabled) {
   background: var(--panel-2);
   border-color: var(--border-strong);
+}
+
+/* Icon-only buttons (⚙ settings, 🗑 delete) — larger, square, easier to hit
+   and clearly visible. The default button padding made the single glyph feel
+   cramped and hard to notice, so give it a fixed touch-target size + bigger
+   glyph. */
+button.icon-btn {
+  font-size: 1.25rem;
+  line-height: 1;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 var(--s-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 button.destructive {
@@ -2504,6 +2534,66 @@ input::placeholder { color: var(--muted-2); }
   }
 }
 
+/* Extraction path cheatsheet — how-to-write-the-path guidance */
+.ex-help {
+  margin: 0 0 var(--s-3);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--s-2) var(--s-3);
+}
+.ex-help > summary {
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent-2);
+  list-style: none;
+  user-select: none;
+}
+.ex-help > summary::-webkit-details-marker { display: none; }
+.ex-help > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--muted);
+  transition: transform var(--t-fast);
+}
+.ex-help[open] > summary::before { transform: rotate(90deg); }
+.ex-help-body { margin-top: var(--s-2); }
+.ex-help-lead { margin-top: 0; }
+.ex-help-note { color: var(--muted-2); }
+.ex-help-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--s-2) 0;
+  font-size: var(--text-xs);
+}
+.ex-help-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: top;
+}
+.ex-help-table tr:first-child td {
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 10px;
+}
+.ex-help-table tr:last-child td { border-bottom: none; }
+.ex-help-table td:last-child { white-space: nowrap; }
+.ex-help code,
+.ex-help-table code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: var(--text-strong);
+}
+
 /* ============================================================
    Spinner (inline button + standalone)
    ============================================================ */
@@ -2881,6 +2971,63 @@ textarea:focus-visible {
    ============================================================ */
 .sparkline { display: block; width: 100%; height: auto; }
 
+/* Interactive wrapper — hosts the hover tooltip positioned over the trend. */
+.sparkline-wrap { position: relative; width: 100%; cursor: crosshair; }
+
+.spark-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: 6px 9px;
+  font-size: 11px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  z-index: 20;
+}
+.st-time {
+  font-weight: 600;
+  color: var(--text-strong);
+  margin-bottom: 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--border);
+}
+.st-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  margin: 2px 0;
+}
+.st-row b {
+  margin-left: auto;
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+}
+.st-row b.bad { color: var(--g-5xx); }
+.st-row.muted { color: var(--muted-2); }
+.st-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.st-dot.ok { background: var(--g-2xx); }
+.st-dot.fail { background: var(--g-5xx); }
+.st-empty { color: var(--muted-2); font-style: italic; }
+
+/* URL-trend legend under the sparkline. */
+.kpi-spark-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.spark-legend { display: flex; gap: 10px; font-size: 10px; color: var(--muted-2); }
+.sl-item { display: inline-flex; align-items: center; gap: 4px; }
+.sl-line { width: 12px; height: 2px; background: var(--g-2xx); border-radius: 1px; display: inline-block; }
+.sl-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--g-5xx); display: inline-block; }
+
 .sparkline-empty {
   display: flex;
   align-items: center;
@@ -3045,6 +3192,37 @@ textarea:focus-visible {
   color: var(--muted-2);
   font-weight: 500;
 }
+
+/* Legend for the activity timeline — colour = status, height = latency. */
+.timeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.tl-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.tl-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.tl-swatch.sw-ok { background: var(--g-2xx); }
+.tl-swatch.sw-warn { background: var(--g-4xx); }
+.tl-swatch.sw-fail { background: var(--g-5xx); }
+.tl-swatch.sw-empty {
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px dashed rgba(148, 163, 184, 0.4);
+}
+.tl-legend-sep { color: var(--muted-2); }
+.tl-legend-note { font-style: italic; color: var(--muted-2); }
 
 /* ============================================================
    Failure chip
@@ -4197,6 +4375,57 @@ textarea:focus-visible {
    ============================================================ */
 
 /* Step indicator — wizard breadcrumb at top of modal */
+/* Local-file import (browse-from-desktop) controls. */
+.import-or {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: var(--s-2) 0;
+}
+.import-or::before,
+.import-or::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+.import-or span { padding: 0 var(--s-3); }
+
+.import-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+.import-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 2px 6px 2px 8px;
+  font-size: var(--text-xs);
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-file-clear {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 0.85em;
+  line-height: 1;
+}
+.import-file-clear:hover { color: var(--g-5xx); background: transparent; }
+
 .import-stepper {
   display: flex;
   align-items: center;

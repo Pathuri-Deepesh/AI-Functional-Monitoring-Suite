@@ -1478,6 +1478,41 @@ function ExtractionsEditor(props: { extractions: Extraction[]; setExtractions: (
       <p className="sub small">
         Capture values from this step's response so later steps can use them as <code>{`{{name}}`}</code>.
       </p>
+
+      {/* Path cheatsheet — most users don't know JSONPath, so spell out the exact
+          text to type per use-case. Kept in sync with the evaluator in
+          backend/src/extraction.ts (jsonPath): supports $, dotted keys, [n],
+          ['quoted key'], [*] and $[*]; NOT slices, filters, or `..`. */}
+      <details className="ex-help" open>
+        <summary>How do I write the path? — examples</summary>
+        <div className="ex-help-body">
+          <p className="muted small ex-help-lead">
+            For <b>From body</b>, point at the value inside the JSON reply. The leading{" "}
+            <code>$.</code> is optional — <code>auth.token</code> works the same as <code>$.auth.token</code>.
+          </p>
+          <table className="ex-help-table">
+            <tbody>
+              <tr><td>What you want to capture</td><td>Type this</td></tr>
+              <tr><td>The whole reply</td><td><code>$</code></td></tr>
+              <tr><td>A field — e.g. a token at <code>auth.token</code></td><td><code>$.auth.token</code></td></tr>
+              <tr><td>The first item of a list</td><td><code>$.items[0]</code></td></tr>
+              <tr><td>A field of the first item</td><td><code>$.items[0].id</code></td></tr>
+              <tr><td>A key that has a space in its name</td><td><code>$['user name']</code></td></tr>
+              <tr><td><b>Every</b> item of a list (to Loop over)</td><td><code>$.items[*]</code></td></tr>
+              <tr><td>One field from every item</td><td><code>$.items[*].id</code></td></tr>
+              <tr><td>When the reply itself is a list</td><td><code>$[*]</code></td></tr>
+            </tbody>
+          </table>
+          <p className="muted small">
+            <b>From header</b>: type the header name, e.g. <code>X-Session-ID</code>.{" "}
+            <b>From status code</b>: no path needed.
+          </p>
+          <p className="muted small ex-help-note">
+            Not supported: ranges like <code>[0:5]</code>, filters like <code>[?(…)]</code>, or recursive <code>..</code>.
+          </p>
+        </div>
+      </details>
+
       {extractions.length === 0 && (
         <div className="empty-inline">No extractions yet. Click "Add" to capture a value.</div>
       )}

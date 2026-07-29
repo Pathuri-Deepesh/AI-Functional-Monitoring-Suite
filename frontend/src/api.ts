@@ -108,7 +108,13 @@ export async function exportProjectOpenAPI(
 // write (all-or-nothing inside a single SQLite tx on the backend).
 export async function previewSwaggerImport(
   projectId: string,
-  input: { specUrl: string; baseUrlOverride?: string; includeDeprecated?: boolean }
+  input: {
+    specUrl?: string;
+    /** Raw spec text from a browsed local file (alternative to specUrl). */
+    specContent?: string;
+    baseUrlOverride?: string;
+    includeDeprecated?: boolean;
+  }
 ): Promise<ImportPreview> {
   return jsonOrThrow(
     await fetch(`${BASE}/projects/${projectId}/import/openapi/preview`, {
@@ -122,7 +128,9 @@ export async function previewSwaggerImport(
 export async function applySwaggerImport(
   projectId: string,
   input: {
-    specUrl: string;
+    specUrl?: string;
+    /** Raw spec text from a browsed local file (alternative to specUrl). */
+    specContent?: string;
     selections: ImportSelections;
     baseUrlOverride?: string;
     includeDeprecated?: boolean;

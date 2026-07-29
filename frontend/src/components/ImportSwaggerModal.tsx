@@ -27,6 +27,11 @@ interface Props {
  */
 export function ImportSwaggerModal(props: Props) {
   const [specUrl, setSpecUrl] = useState("");
+  // Local-file import: when the user browses to a spec on their machine, the
+  // browser reads its TEXT (not its path — browsers can't expose paths) and we
+  // send that as specContent. Takes precedence over specUrl when set.
+  const [specContent, setSpecContent] = useState("");
+  const [fileName, setFileName] = useState("");
   const [baseUrlOverride, setBaseUrlOverride] = useState("");
   const [includeDeprecated, setIncludeDeprecated] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -42,8 +47,8 @@ export function ImportSwaggerModal(props: Props) {
   const [error, setError] = useState<string | null>(null);
 
   async function handlePreview() {
-    if (!specUrl.trim()) {
-      setError("Paste a Swagger / OpenAPI spec URL first.");
+    if (!specContent.trim() && !specUrl.trim()) {
+      setError("Paste a spec URL or browse to a spec file first.");
       return;
     }
     setPreviewing(true);
@@ -51,7 +56,9 @@ export function ImportSwaggerModal(props: Props) {
     setPreview(null);
     try {
       const p = await previewSwaggerImport(props.project.id, {
-        specUrl: specUrl.trim(),
+        // A browsed file wins over a typed URL.
+        specContent: specContent.trim() || undefined,
+        specUrl: specContent.trim() ? undefined : specUrl.trim() || undefined,
         baseUrlOverride: baseUrlOverride.trim() || undefined,
         includeDeprecated,
       });
@@ -82,7 +89,9 @@ export function ImportSwaggerModal(props: Props) {
     setError(null);
     try {
       const result = await applySwaggerImport(props.project.id, {
-        specUrl: specUrl.trim(),
+        // Must match the source used at preview time so the same spec is applied.
+        specContent: specContent.trim() || undefined,
+        specUrl: specContent.trim() ? undefined : specUrl.trim() || undefined,
         selections: {
           endpointIdentities: Array.from(selEndpoints),
           flowIds: Array.from(selFlows),
@@ -161,24 +170,79 @@ export function ImportSwaggerModal(props: Props) {
       >
         <Stepper active={1} />
         <p style={{ marginTop: 0, color: "var(--muted)", fontSize: "var(--text-base)" }}>
-          Paste a Swagger / OpenAPI 3.x spec URL — we'll create one Monitored URL per endpoint.
-          If the spec was previously exported by this suite, your Flows and Prereqs will be
-          round-tripped automatically.
+          Paste a Swagger / OpenAPI 3.x spec URL, or browse to a spec file on your computer —
+          we'll create one Monitored URL per endpoint. If the spec was previously exported by
+          this suite, your Flows and Prereqs will be round-tripped automatically.
         </p>
         <label className="field">
           <div className="field-head">
-            <span className="field-label">
-              Spec URL <span className="required">*</span>
-            </span>
+            <span className="field-label">Spec URL</span>
           </div>
           <input
             autoFocus
             type="url"
             placeholder="https://petstore3.swagger.io/api/v3/openapi.json"
             value={specUrl}
-            onChange={(e) => setSpecUrl(e.target.value)}
-            required
+            onChange={(e) => {
+              setSpecUrl(e.target.value);
+              // Typing a URL clears a previously-browsed file (they're exclusive).
+              if (e.target.value && specContent) {
+                setSpecContent("");
+                setFileName("");
+              }
+            }}
+            disabled={!!specContent}
           />
+        </label>
+
+        {/* OR — browse to a local spec file (e.g. one you exported to your desktop). */}
+        <div className="import-or">
+          <span>or</span>
+        </div>
+        <label className="field">
+          <div className="field-head">
+            <span className="field-label">Import from a file</span>
+            <span className="field-hint">Select a .yaml / .yml / .json OpenAPI 3.x file</span>
+          </div>
+          <div className="import-file-row">
+            <input
+              type="file"
+              accept=".yaml,.yml,.json,application/json,text/yaml,application/x-yaml"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                if (file.size > 10 * 1024 * 1024) {
+                  setError("File exceeds the 10MB limit.");
+                  return;
+                }
+                const reader = new FileReader();
+                reader.onload = () => {
+                  setSpecContent(String(reader.result ?? ""));
+                  setFileName(file.name);
+                  setSpecUrl(""); // a file wins over a URL
+                  setError(null);
+                };
+                reader.onerror = () => setError("Could not read that file.");
+                reader.readAsText(file);
+              }}
+            />
+            {fileName && (
+              <span className="import-file-chip">
+                📄 {fileName}
+                <button
+                  type="button"
+                  className="import-file-clear"
+                  title="Remove file"
+                  onClick={() => {
+                    setSpecContent("");
+                    setFileName("");
+                  }}
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+          </div>
         </label>
         <label className="field">
           <div className="field-head">
@@ -205,14 +269,18 @@ export function ImportSwaggerModal(props: Props) {
           <button type="button" className="ghost" onClick={() => props.onDone()}>
             Cancel
           </button>
-          <button type="submit" className="primary" disabled={previewing || !specUrl.trim()}>
+          <button
+            type="submit"
+            className="primary"
+            disabled={previewing || (!specUrl.trim() && !specContent.trim())}
+          >
             {previewing ? (
               <>
                 <span className="spinner-inline" />
-                Fetching spec…
+                {specContent ? "Reading spec…" : "Fetching spec…"}
               </>
             ) : (
-              "Fetch spec"
+              specContent ? "Read spec" : "Fetch spec"
             )}
           </button>
         </div>

@@ -148,7 +148,15 @@ export function KpiBar({ urls, flows = [], sparklineByUrl, windowMinutes = 24 * 
         <div className="kpi-spark-wrap">
           <Sparkline points={projectSparkline} width={200} height={40} />
         </div>
-        <div className="kpi-lbl">URL trend ({formatTrendLabel(windowMinutes)})</div>
+        <div className="kpi-spark-foot">
+          <div className="kpi-lbl">URL trend ({formatTrendLabel(windowMinutes)})</div>
+          {/* Legend so the line + dots are self-explanatory; hover a point for
+              the healthy/failed breakdown. */}
+          <div className="spark-legend">
+            <span className="sl-item"><span className="sl-swatch sl-line" /> latency</span>
+            <span className="sl-item"><span className="sl-swatch sl-dot" /> failures</span>
+          </div>
+        </div>
       </div>
     </div>
   );

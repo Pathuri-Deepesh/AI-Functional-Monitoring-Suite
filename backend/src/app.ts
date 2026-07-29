@@ -11,6 +11,7 @@ import {
   applyImport,
   diffSpecAgainstProject,
   fetchAndParseSpec,
+  parseSpecContent,
 } from "./openapiImport.js";
 import {
   addApiKey,
@@ -281,13 +282,18 @@ app.post("/api/projects/:id/import/openapi/preview", async (req, res) => {
     res.status(404).json({ error: "Project not found" });
     return;
   }
-  const { specUrl, baseUrlOverride, includeDeprecated } = req.body ?? {};
-  if (typeof specUrl !== "string" || !specUrl.trim()) {
-    res.status(400).json({ error: "specUrl is required" });
+  const { specUrl, specContent, baseUrlOverride, includeDeprecated } = req.body ?? {};
+  const hasContent = typeof specContent === "string" && specContent.trim().length > 0;
+  const hasUrl = typeof specUrl === "string" && specUrl.trim().length > 0;
+  if (!hasContent && !hasUrl) {
+    res.status(400).json({ error: "Provide a spec URL or upload a spec file" });
     return;
   }
   try {
-    const parsed = await fetchAndParseSpec(specUrl);
+    // A browsed file (specContent) is parsed directly; otherwise fetch the URL.
+    const parsed = hasContent
+      ? await parseSpecContent(specContent)
+      : await fetchAndParseSpec(specUrl);
     const urls = listUrlsByProject(project.id);
     const flows = listFlowsByProject(project.id)
       .map((f) => getFlowWithSteps(f.id))
@@ -319,12 +325,15 @@ app.post("/api/projects/:id/import/openapi/apply", async (req, res) => {
   }
   const {
     specUrl,
+    specContent,
     selections,
     baseUrlOverride,
     includeDeprecated,
   } = req.body ?? {};
-  if (typeof specUrl !== "string" || !specUrl.trim()) {
-    res.status(400).json({ error: "specUrl is required" });
+  const hasContent = typeof specContent === "string" && specContent.trim().length > 0;
+  const hasUrl = typeof specUrl === "string" && specUrl.trim().length > 0;
+  if (!hasContent && !hasUrl) {
+    res.status(400).json({ error: "Provide a spec URL or upload a spec file" });
     return;
   }
   if (!selections || typeof selections !== "object") {
@@ -332,7 +341,10 @@ app.post("/api/projects/:id/import/openapi/apply", async (req, res) => {
     return;
   }
   try {
-    const parsed = await fetchAndParseSpec(specUrl);
+    // Same source as the preview step — parse the browsed file or fetch the URL.
+    const parsed = hasContent
+      ? await parseSpecContent(specContent)
+      : await fetchAndParseSpec(specUrl);
     const result = applyImport(project.id, parsed, {
       endpointIdentities: Array.isArray(selections.endpointIdentities)
         ? selections.endpointIdentities

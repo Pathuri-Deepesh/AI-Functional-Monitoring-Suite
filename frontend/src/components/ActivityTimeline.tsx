@@ -186,6 +186,17 @@ export function ActivityTimeline({ history, windowMinutes = 24 * 60, buckets = 6
           <span key={i}>{lbl}</span>
         ))}
       </div>
+
+      {/* Legend — explains what a bar's color and height mean, so the trend
+          bar is self-explanatory without hovering each bar. */}
+      <div className="timeline-legend">
+        <span className="tl-legend-item"><span className="tl-swatch sw-ok" /> Healthy</span>
+        <span className="tl-legend-item"><span className="tl-swatch sw-warn" /> 4xx warning</span>
+        <span className="tl-legend-item"><span className="tl-swatch sw-fail" /> 5xx / error</span>
+        <span className="tl-legend-item"><span className="tl-swatch sw-empty" /> No checks</span>
+        <span className="tl-legend-sep">·</span>
+        <span className="tl-legend-note">bar height = avg latency</span>
+      </div>
     </div>
   );
 }
