@@ -333,6 +333,17 @@ export class MonitorSuiteVpcStack extends cdk.Stack {
           value: config.region,
         },
         {
+          // Sender ("From") address for SES failure/audit emails. Must be an
+          // address (or domain) already VERIFIED in SES for this region. The
+          // EC2 instance role already carries ses:SendEmail (granted above), so
+          // no AWS keys are needed. Leave notification RECIPIENTS to the app UI
+          // (per-project Settings → Notifications). If this is empty the app
+          // simply reports "SES not configured" and sends nothing (no crash).
+          namespace: "aws:elasticbeanstalk:application:environment",
+          optionName: "SES_FROM_EMAIL",
+          value: config.sesFromEmail ?? "",
+        },
+        {
           namespace: "aws:elasticbeanstalk:application:environment",
           optionName: "S3_BUCKET_NAME",
           value: `monitor-suite-storage-${envName}`,

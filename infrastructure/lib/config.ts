@@ -78,6 +78,13 @@ export interface EnvConfig {
    * subnet's AZ plus at least one more.
    */
   providedElbSubnetIds: string[];
+  /**
+   * Sender ("From") address for SES failure/audit emails. Must be an address
+   * already VERIFIED in SES for this region. Optional — if omitted, the app
+   * runs fine and just reports "SES not configured" (sends no email).
+   * Recipients are configured per-project in the app UI, not here.
+   */
+  sesFromEmail?: string;
 }
 
 /**
@@ -119,6 +126,8 @@ export const ENVS: Record<string, EnvConfig> = {
       // NOTE: subnet-07771cba76e16c946 (1b) was tried first but has only 1 free
       // IP; an ALB needs >=8 free IPs per subnet, so it failed. Use this 1b one.
     ],
+    // SES sender for failure/audit emails — already verified in SES (us-east-1).
+    sesFromEmail: "dp1@logitech.com",
   },
   staging: {
     envName: "staging",
