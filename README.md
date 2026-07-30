@@ -2,17 +2,21 @@
 
 A self-hosted API monitoring suite that watches HTTP endpoints, chains multi-step API workflows, alerts on failures over Slack and Email, and round-trips entire projects to OpenAPI / Swagger.
 
-> Built as a Logitech intern project by [Deepesh P](#). Currently at **Phase 1.27** — fully featured monitor + flow runner + email/Slack alerts (with dual-channel latency-vs-general routing) + OpenAPI export & import + 2-pane Settings (incl. Light/Dark theme) + full URL edit (incl. retry/wait) + Postman-style `{{api_key}}` substitution. AI layer (Phase 2) is deferred.
+> Built as a Logitech intern project by [Deepesh P](#). Currently at **Phase 1.36** — fully featured monitor + flow runner + email/Slack alerts (with dual-channel latency-vs-general routing) + OpenAPI export & import + 2-pane Settings (incl. Light/Dark theme) + full URL edit (incl. retry/wait) + Postman-style `{{api_key}}` substitution. **Deployed live on AWS Elastic Beanstalk** (see [Deploy to the Live Server](#️-deploy-to-the-live-server-aws)). AI layer (Phase 2) is deferred.
 
 ---
 
 ## 🚀 Local Setup Guide
 
-Get the app running on your own machine from a fresh clone. Two ways to run it:
-**Dev mode** (two servers, hot-reload — best while developing) or
-**Bundled mode** (one server — mirrors production).
+This gets the app running on **your own computer** from a fresh copy. You don't need to be a developer — follow the steps in order. Two ways to run it:
+**Dev mode** (two programs side-by-side, auto-reload — best while developing) or
+**Bundled mode** (one program — mirrors the real server).
 
-### 1. Prerequisites
+> **Two words you'll see everywhere below:**
+> - **Terminal** — the text window where you type commands. On **Windows**: open *PowerShell* (Start menu → type "PowerShell"). On **Mac**: open *Terminal* (Cmd+Space → type "Terminal").
+> - **Repo root** — the main project folder, called **`AI-Functional-Monitoring-Suite`**. It's the folder that directly contains `backend`, `frontend`, and `package.json`. **Almost every command below runs from here.** Not sure you're in it? Type `dir` (Windows) or `ls` (Mac) and check you can see `package.json`.
+
+### 1. Prerequisites (install these once)
 
 | Requirement | Version | Check with | Notes |
 |---|---|---|---|
@@ -24,46 +28,54 @@ Get the app running on your own machine from a fresh clone. Two ways to run it:
 
 No database server, Docker, or AWS account is needed to run locally — SQLite is a single file and email/Slack are optional.
 
-### 2. Clone the repository
+### 2. Download the code
+
+📁 **Run this from:** any folder you like — it creates the project folder for you.
 
 ```bash
 git clone <repo-url>
 cd AI-Functional-Monitoring-Suite
 ```
 
+After the `cd`, you are now **inside the repo root**. Stay here for the rest of the steps.
+
 ### 3. Install dependencies
 
-From the **repo root** — this installs both backend and frontend in one command:
+📁 **Run this from:** the **repo root** (`AI-Functional-Monitoring-Suite/`).
 
 ```bash
 npm run install:all
 ```
 
-<sub>(Equivalent to `npm --prefix backend install && npm --prefix frontend install`.)</sub>
+This one command installs everything for **both** the backend and the frontend. <sub>(Same as running `npm install` inside `backend/` and again inside `frontend/`.)</sub>
 
-### 4. Run it — Option A: Dev mode (recommended while developing)
+### 4. Start the app — pick ONE option
 
-Two servers with hot-reload. Open **two terminals** from the repo root:
+#### Option A — Dev mode (recommended while developing)
 
-**Terminal 1 — backend** (API on port **4000**):
+You need **two terminal windows**, both opened at the **repo root**. Leave both running while you use the app.
+
+📁 **Terminal 1 — the backend** (the engine / API, runs on port **4000**). Run from the **repo root**:
 ```bash
 npm run dev:backend
 ```
 
-**Terminal 2 — frontend** (dashboard on port **5173**):
+📁 **Terminal 2 — the frontend** (the dashboard you look at, runs on port **5173**). Run from the **repo root**:
 ```bash
 npm run dev:frontend
 ```
 
 Then open **<http://localhost:5173>** in your browser.
 
-### 4. Run it — Option B: Bundled mode (mirrors production)
+#### Option B — Bundled mode (one window, like the real server)
 
-Frontend is compiled to static files and served by the backend — **one process, one port**:
+The dashboard is built into the backend and served by one program — **one process, one port**.
+
+📁 **Run these from:** the **repo root**. One terminal is enough.
 
 ```bash
-npm run build      # builds frontend → copies into backend/public
-npm start          # serves everything on port 4000
+npm run build      # step 1: build the dashboard into backend/public
+npm start          # step 2: run everything on one port (4000)
 ```
 
 Then open **<http://localhost:4000>**.
@@ -96,8 +108,11 @@ first run, gitignored). Deleting it resets the app to empty.
 | `EADDRINUSE :4000` (or `:5173`) | An old process is holding the port. Find & kill it: **Windows** `netstat -ano \| findstr :4000` then `taskkill /F /PID <pid>` · **Mac/Linux** `lsof -ti:4000 \| xargs kill`. |
 | Dashboard loads but data doesn't update | Make sure the **backend** terminal is running — the frontend polls it on port 4000. |
 | Blank page in bundled mode | Run `npm run build` before `npm start` (the backend serves `backend/public/`, which the build creates). |
+| `npm ... not recognized` / "command not found" | You're not in the **repo root**, or Node isn't installed. `cd` into `AI-Functional-Monitoring-Suite` and re-check `node -v`. |
 
-### Quick command reference (from repo root)
+### Quick command reference
+
+📁 **All of these run from the repo root** (`AI-Functional-Monitoring-Suite/`).
 
 | Command | What it does |
 |---|---|
@@ -107,6 +122,94 @@ first run, gitignored). Deleting it resets the app to empty.
 | `npm run build` | Production build (frontend → `backend/public`) |
 | `npm start` | Run the bundled single-server app (port 4000) |
 | `npm run clean` | Remove build outputs (`backend/public`, `frontend/dist`) |
+
+---
+
+## ☁️ Deploy to the Live Server (AWS)
+
+This section is for pushing your changes to the **real, shared server** so other people see them. The app is hosted on **AWS Elastic Beanstalk** and reachable **from the company network** at **<https://monitor-cloudservices.np.logitech.io>**.
+
+> **Read this first:** deploying changes the live app that everyone uses. It's safe — you can undo it with a single command (see step 4) — but it is not the same as running on your own machine. Do it on purpose, not by accident.
+
+**What "deploying" actually does:** your computer builds the app and uploads it to AWS; AWS then runs the new version on the live server. Start to finish is about **3–6 minutes**, and the command shows progress the whole time.
+
+### 1. One-time setup (once per computer)
+
+You need three things ready before your **first** deploy:
+
+**a) Install the Elastic Beanstalk command-line tool (`eb`).**  📁 Run from: anywhere.
+```bash
+pip install awsebcli
+eb --version              # check it worked
+```
+> 🪟 **Windows note:** if `eb --version` says *"eb is not recognized"*, the tool installed to a folder that isn't on your PATH — usually `C:\Users\<you>\AppData\Roaming\Python\Python3xx\Scripts`. Add that folder to your PATH (then re-open the terminal), or call `eb` by its full path.
+
+**b) Set up AWS credentials** (the keys that let your computer talk to our AWS account — ask the team for the `monitor-app-user` keys if you don't have them).  📁 Run from: anywhere.
+```bash
+aws configure                 # paste Access Key + Secret Key; region = us-east-1
+aws sts get-caller-identity   # check it worked — prints an account number, no error
+```
+
+**c) Be on the company network / VPN.** The live server only accepts connections from the office network — off-network, uploads and checks will time out.
+
+### 2. Deploy your changes
+
+📁 **Run this from:** the **repo root** (`AI-Functional-Monitoring-Suite/`) — the same main folder as local setup. **NOT** the `infrastructure` folder.
+
+```bash
+npm run build && eb deploy
+```
+
+That's the whole deploy. What each part does:
+- **`npm run build`** — rebuilds the dashboard so your latest changes are included. **Never skip this** — if you do, the live site keeps showing the *old* screen even after deploying.
+- **`eb deploy`** — zips the app, uploads it, and switches the live server to your new version. Wait until it prints **`Environment update completed successfully`**.
+
+> 💡 Always run **both together** (`npm run build && eb deploy`). Building when nothing changed is harmless; forgetting to build is the #1 "I deployed but nothing changed" mistake.
+
+### 3. Confirm it went live
+
+📁 **Run this from:** the **repo root**.
+```bash
+eb status        # look for  Health: Green  and a new "Deployed Version"
+```
+Then open <https://monitor-cloudservices.np.logitech.io/api/health> — it should say `{"ok":true,"service":"monitoring-backend"}`. Finally open the site and **hard-refresh** (Ctrl+Shift+R) so your browser drops the old cached screen.
+
+### 4. If something goes wrong — undo first, debug later
+
+Because it's the live site, get it working again *before* investigating.  📁 Run from: the **repo root**.
+```bash
+eb appversion                      # lists past versions — note the last good label
+eb deploy --version <that-label>   # instantly puts the previous good version back
+```
+Then look at what failed:
+```bash
+eb logs        # recent logs  (eb logs --all  pulls everything)
+eb health      # per-instance health detail
+```
+
+### 5. Deploy troubleshooting
+
+| Symptom | Cause & fix |
+|---|---|
+| `eb` not recognized | The EB tool isn't on your PATH — see the Windows note in step 1a. |
+| Upload / health check times out | You're off the company network. Connect to the office network / VPN. |
+| Old screen after deploy | You skipped `npm run build`, or the browser cached it — hard-refresh (Ctrl+Shift+R). |
+| Health turns **Red** after deploy | The new version failed to start. Roll back (step 4), then read `eb logs`. |
+| Access-denied / credential error | AWS keys missing or wrong. Re-run `aws configure`; verify with `aws sts get-caller-identity`. |
+
+### ⛔ NEVER run these on the live environment
+
+- **`eb create`** — makes a brand-new, extra (billable) environment. We already have ours; only ever use `eb deploy`.
+- **`eb setenv`** — crashes our environment. Environment variables live in code instead: `cd infrastructure` → `npx cdk deploy`.
+
+### Deploy — the short version
+
+```bash
+# from the repo root, on the company network:
+npm run build && eb deploy
+eb status                                  # wait for Health: Green
+# if it breaks:  eb deploy --version <last-good-label>
+```
 
 ---
 
